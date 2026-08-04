@@ -1,0 +1,22 @@
+{
+  "name": "retro-soccer-game",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Retro Soccer 2D (Bola clone) — Phaser 3 + Vite + TypeScript MVP",
+  "scripts": {
+    "gen:sprites": "node scripts/generate-sprites.js",
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "phaser": "^3.90.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "vite": "^7.0.0",
+    "vitest": "^3.2.4"
+  }
+}

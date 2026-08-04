@@ -1,0 +1,48 @@
+{
+  "files": [
+    "pitch.png",
+    "ball.png",
+    "ball-shadow.png",
+    "players.png"
+  ],
+  "images": {
+    "pitch": {
+      "w": 960,
+      "h": 540
+    },
+    "ball": {
+      "w": 32,
+      "h": 32
+    },
+    "ballShadow": {
+      "w": 32,
+      "h": 16
+    }
+  },
+  "spritesheets": {
+    "players": {
+      "frameW": 32,
+      "frameH": 32,
+      "frames": [
+        "home-idle",
+        "home-run",
+        "home-kick",
+        "away-idle",
+        "away-run",
+        "away-kick"
+      ]
+    }
+  },
+  "palettes": {
+    "home": {
+      "shirt": "#d32f2f",
+      "shorts": "#ffffff",
+      "skin": "#f1c27d"
+    },
+    "away": {
+      "shirt": "#1976d2",
+      "shorts": "#ffffff",
+      "skin": "#f1c27d"
+    }
+  }
+}

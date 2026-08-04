@@ -1,0 +1,7 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["./tests/node-shim.d.ts"]
+  },
+  "include": ["tests"]
+}
