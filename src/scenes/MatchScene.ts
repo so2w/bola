@@ -1,19 +1,18 @@
 import Phaser from 'phaser';
+import { Player } from '../entities/Player';
+import { Ball } from '../entities/Ball';
 
 /** Frame index inside the players sheet = position in manifest.spritesheets.players.frames. */
 const HOME_RUN_FRAME = 1;
 
 /**
- * MatchScene — RENDER-ONLY STUB for Paso 1.
- *
- * Deliberately free of gameplay logic (input handling, body motion, opponent
- * logic, scoring are all out of scope here). It only proves the asset pipeline
- * end-to-end by rendering the generated pitch, ball, one running player, and
- * an "assets OK" HUD line. Real match behavior lands in later changes (see
- * AGENTS.md subsystems 1/2/4 and the TODO stubs under src/entities +
- * src/systems).
+ * MatchScene — Core gameplay wiring for Paso 2.
+ * Renders pitch, instantiates Player and Ball entities, delegates preUpdate.
  */
 export class MatchScene extends Phaser.Scene {
+  private player!: Player;
+  private ball!: Ball;
+
   constructor() {
     super('MatchScene');
   }
@@ -22,28 +21,33 @@ export class MatchScene extends Phaser.Scene {
     // Static pitch backdrop.
     this.add.image(480, 270, 'pitch');
 
-    // Static centered ball with its shadow (no Z-axis physics yet).
-    this.add.image(480, 270, 'ballShadow');
-    this.add.image(480, 268, 'ball');
+    // World bounds for Arcade physics
+    this.physics.world.setBounds(0, 0, 960, 540);
 
-    // One home player looping the Run frame pair feel: for the stub, a simple
-    // two-frame run flicker built from the spritesheet (home row frames).
-    this.anims.create({
-      key: 'run',
-      frames: [{ key: 'players', frame: HOME_RUN_FRAME }],
-      frameRate: 6,
-      repeat: -1,
+    // Instantiate entities
+    this.ball = new Ball(this, 480, 270);
+    this.player = new Player(this, 560, 270);
+
+    // Wire shot event from Player to Ball
+    this.player.onShot((power, facing) => {
+      this.ball.applyKick(facing, power);
+      // Camera shake deferred to later slice
     });
-    this.add.sprite(560, 270, 'players', HOME_RUN_FRAME).play('run');
 
     // HUD proof-of-life text.
     this.add
-      .text(480, 24, 'assets OK', {
+      .text(480, 24, 'Gameplay OK', {
         fontFamily: 'monospace',
         fontSize: '20px',
         color: '#ffffff',
       })
       .setOrigin(0.5, 0.5)
       .setDepth(10);
+  }
+
+  update(time: number, delta: number): void {
+    // Delegate to entities
+    this.player.preUpdate(time, delta);
+    this.ball.preUpdate(time, delta);
   }
 }
