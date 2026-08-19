@@ -31,7 +31,10 @@ export class MatchScene extends Phaser.Scene {
     // Wire shot event from Player to Ball
     this.player.onShot((power, facing) => {
       this.ball.applyKick(facing, power);
-      // Camera shake deferred to later slice
+      if (power > 0.6) {
+        const magnitude = Phaser.Math.Clamp(power * 0.02, 0.008, 0.02);
+        this.cameras.main.shake(100, magnitude);
+      }
     });
 
     // HUD proof-of-life text.

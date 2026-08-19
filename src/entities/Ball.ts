@@ -22,11 +22,23 @@ export class Ball {
   }
 
   public preUpdate(time: number, delta: number): void {
-    // Z model and shadow sync are deferred to later slice
-    // Keep sprite synced with physics body
+    // Z model with spring decay
+    const spring = 0.15;
+    if (this.zTarget > 0) {
+      this.zTarget *= 0.92;
+    }
+    this.z += (this.zTarget - this.z) * spring;
+    this.z = Math.max(0, this.z);
+
+    // Sync shadow scale/alpha to Z
     if (this.shadowSprite) {
       this.shadowSprite.x = this.sprite.x;
       this.shadowSprite.y = this.sprite.y + 8;
+      const norm = Phaser.Math.Clamp(this.z / this.maxZ, 0, 1);
+      const scale = 1 - norm * 0.6;
+      const alpha = 0.6 - norm * 0.5;
+      this.shadowSprite.setScale(scale);
+      this.shadowSprite.setAlpha(Math.max(0.1, alpha));
     }
   }
 
@@ -39,6 +51,8 @@ export class Ball {
     }
     const velocity = impulse.clone().normalize().scale(effectivePower * maxImpulse);
     this.body.setVelocity(velocity.x, velocity.y);
+    // Z peak proportional to power
+    this.zTarget = power * this.maxZ;
   }
 
   public reset(): void {
