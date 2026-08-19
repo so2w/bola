@@ -7,6 +7,17 @@
  * - Offensive mode (with ball): advance toward the rival goal; shoot when
  *   distance to goal < 120 px.
  */
+export type AIState = 'DEFENSIVE' | 'OFFENSIVE';
+
 export class SimpleAI {
-  // Intentionally empty — stub only.
+  public state: AIState = 'DEFENSIVE';
+  public readonly possessionRadius = 28;
+  public readonly shootCooldownMs = 400;
+  private lastShotTime = 0;
+
+  constructor() {}
+
+  public update(delta: number, rival: any, ball: any, matchManager: any): void {
+    // Foundation skeleton: no logic yet, keep build passing
+  }
 }

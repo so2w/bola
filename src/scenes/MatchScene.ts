@@ -1,6 +1,8 @@
 import Phaser from 'phaser';
 import { Player } from '../entities/Player';
 import { Ball } from '../entities/Ball';
+import { SimpleAI } from '../systems/SimpleAI';
+import { MatchManager } from '../systems/MatchManager';
 
 /** Frame index inside the players sheet = position in manifest.spritesheets.players.frames. */
 const HOME_RUN_FRAME = 1;
@@ -12,6 +14,9 @@ const HOME_RUN_FRAME = 1;
 export class MatchScene extends Phaser.Scene {
   private player!: Player;
   private ball!: Ball;
+  private rival?: Player;
+  private ai?: SimpleAI;
+  private manager?: MatchManager;
 
   constructor() {
     super('MatchScene');
@@ -27,6 +32,12 @@ export class MatchScene extends Phaser.Scene {
     // Instantiate entities
     this.ball = new Ball(this, 480, 270);
     this.player = new Player(this, 560, 270);
+
+    // TODO: Rival instantiation placeholder
+    // this.rival = new Player(this, 400, 270);
+    // this.rival.sprite.setTint(0x0000ff);
+    // this.ai = new SimpleAI();
+    // this.manager = new MatchManager();
 
     // Wire shot event from Player to Ball
     this.player.onShot((power, facing) => {

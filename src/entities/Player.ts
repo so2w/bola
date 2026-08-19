@@ -169,4 +169,19 @@ export class Player {
   public getPower(): number {
     return Phaser.Math.Clamp(this.chargeTimer / this.maxCharge, 0, 1);
   }
+
+  public setPosition(x: number, y: number): void {
+    this.sprite.setPosition(x, y);
+    if (this.body) {
+      this.body.setPosition(x, y);
+    }
+  }
+
+  public shootWithPower(power: number, facing: Phaser.Math.Vector2): void {
+    if (this.kickTimer > 0) {
+      return;
+    }
+    this.startKick();
+    this.shotCallback?.(Phaser.Math.Clamp(power, 0, 1), facing.clone());
+  }
 }

@@ -7,6 +7,22 @@
  * - Match clock: 3 real minutes (1 real second = 3 game seconds).
  * - Goal detection areas, score tracking, "GOAL!" effect, kickoff repositioning.
  */
+export type MatchState = 'KICKOFF' | 'PLAYING' | 'GOAL' | 'OUT_OF_BOUNDS' | 'GAME_OVER';
+
 export class MatchManager {
-  // Intentionally empty — stub only.
+  public state: MatchState = 'KICKOFF';
+  public timeRemaining = 540; // game seconds: 3 real minutes *3
+  public score = { home: 0, away: 0 };
+  public kickoffTimer = 1500;
+  public resetTimer = 0;
+
+  constructor() {}
+
+  public update(delta: number): void {
+    // Foundation skeleton: no logic yet, keep build passing
+  }
+
+  public getTime(): number {
+    return this.timeRemaining;
+  }
 }
