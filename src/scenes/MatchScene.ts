@@ -3,6 +3,8 @@ import { Player } from '../entities/Player';
 import { Ball } from '../entities/Ball';
 import { SimpleAI } from '../systems/SimpleAI';
 import { MatchManager } from '../systems/MatchManager';
+import { CameraController } from '../match/CameraController';
+import { PlayerSelectionSystem } from '../match/PlayerSelectionSystem';
 
 /** Frame index inside the players sheet = position in manifest.spritesheets.players.frames. */
 const HOME_RUN_FRAME = 1;
@@ -17,6 +19,8 @@ export class MatchScene extends Phaser.Scene {
   private rival?: Player;
   private ai?: SimpleAI;
   private manager?: MatchManager;
+  private cameraController?: CameraController;
+  private selectionSystem?: PlayerSelectionSystem;
   private clockText!: Phaser.GameObjects.Text;
   private scoreText!: Phaser.GameObjects.Text;
   private leftGoal!: Phaser.GameObjects.Zone;
@@ -45,6 +49,8 @@ export class MatchScene extends Phaser.Scene {
     this.rival.sprite.setTint(0x0000ff);
     this.ai = new SimpleAI();
     this.manager = new MatchManager();
+    this.cameraController = new CameraController(this.cameras.main);
+    this.selectionSystem = new PlayerSelectionSystem();
 
     // Bind manager context for goal detection and reset
     this.manager.bind(this, this.ball, this.player, this.rival);

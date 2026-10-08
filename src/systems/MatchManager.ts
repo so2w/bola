@@ -7,7 +7,19 @@
  * - Match clock: 3 real minutes (1 real second = 3 game seconds).
  * - Goal detection areas, score tracking, "GOAL!" effect, kickoff repositioning.
  */
-export type MatchState = 'KICKOFF' | 'PLAYING' | 'GOAL' | 'OUT_OF_BOUNDS' | 'GAME_OVER';
+export type MatchState =
+  | 'BOOT'
+  | 'INTRO'
+  | 'KICKOFF'
+  | 'PLAYING'
+  | 'STOPPAGE'
+  | 'THROW_IN'
+  | 'GOAL_KICK'
+  | 'CORNER'
+  | 'FREE_KICK'
+  | 'GOAL'
+  | 'OUT_OF_BOUNDS'
+  | 'GAME_OVER';
 
 export class MatchManager {
   public state: MatchState = 'KICKOFF';
@@ -63,8 +75,14 @@ export class MatchManager {
       return;
     }
 
-    // GOAL / OUT_OF_BOUNDS: pause, countdown reset
-    if (this.state === 'GOAL' || this.state === 'OUT_OF_BOUNDS') {
+    // GOAL / OUT_OF_BOUNDS / THROW_IN / GOAL_KICK / CORNER: pause, countdown reset
+    if (
+      this.state === 'GOAL' ||
+      this.state === 'OUT_OF_BOUNDS' ||
+      this.state === 'THROW_IN' ||
+      this.state === 'GOAL_KICK' ||
+      this.state === 'CORNER'
+    ) {
       this.resetTimer -= delta;
       if (this.resetTimer <= 0) {
         this.resetMatch();

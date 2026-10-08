@@ -25,6 +25,9 @@ export class Player {
     this.body.setCollideWorldBounds(true);
     this.body.setDrag(0.8);
 
+    if (!scene.input || !scene.input.keyboard) {
+      throw new Error('Keyboard plugin is not enabled or available in scene');
+    }
     this.inputKeys = scene.input.keyboard.createCursorKeys();
     // WASD fallback
     this.inputKeys.w = scene.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.W);
@@ -134,12 +137,12 @@ export class Player {
     }
 
     const moving = this.body.velocity.lengthSq() > 0;
-    if (moving && this.animState !== 'Kick') {
+    if (moving) {
       this.animState = 'Run';
       if (this.sprite.anims.currentAnim?.key !== 'player_run') {
         this.sprite.anims.play('player_run', true);
       }
-    } else if (!moving && this.animState !== 'Kick') {
+    } else {
       this.animState = 'Idle';
       if (this.sprite.anims.currentAnim?.key !== 'player_idle') {
         this.sprite.anims.play('player_idle', true);
@@ -172,9 +175,6 @@ export class Player {
 
   public setPosition(x: number, y: number): void {
     this.sprite.setPosition(x, y);
-    if (this.body) {
-      this.body.setPosition(x, y);
-    }
   }
 
   public shootWithPower(power: number, facing: Phaser.Math.Vector2): void {

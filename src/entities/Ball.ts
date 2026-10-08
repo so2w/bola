@@ -57,7 +57,7 @@ export class Ball {
 
   public reset(): void {
     this.body.setVelocity(0, 0);
-    this.body.setPosition(480, 270);
+    this.sprite.setPosition(480, 270);
     this.z = 0;
     this.zTarget = 0;
   }
