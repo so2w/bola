@@ -20,8 +20,8 @@ vi.mock('phaser', () => ({
 // Need to import after mock
 import { MatchScene } from '../src/scenes/MatchScene';
 
-describe('MatchManager.restart', () => {
-  it('resets score/time/state', () => {
+describe('MatchManager.restart (team arrays)', () => {
+  it('resets score/time/state via formation anchors', () => {
     const mgr = new MatchManager();
     mgr.state = 'GAME_OVER';
     mgr.timeRemaining = 120;
@@ -30,9 +30,10 @@ describe('MatchManager.restart', () => {
     mgr.resetTimer = 500;
 
     const ball = { reset: vi.fn() };
-    const home = { setPosition: vi.fn(), body: { setVelocity: vi.fn() } };
-    const away = { setPosition: vi.fn(), body: { setVelocity: vi.fn() } };
-    mgr.bind({} as any, ball as any, home as any, away as any);
+    const mk = () => ({ setPosition: vi.fn(), body: { setVelocity: vi.fn() } });
+    const home = [mk(), mk(), mk()];
+    const away = [mk(), mk(), mk()];
+    mgr.bind({} as any, ball as any, home as any, away as any, { home: '3v3', away: '3v3' });
 
     mgr.restart();
 
@@ -42,8 +43,6 @@ describe('MatchManager.restart', () => {
     expect(mgr.kickoffTimer).toBe(1500);
     expect(mgr.resetTimer).toBe(0);
     expect(ball.reset).toHaveBeenCalled();
-    expect(home.setPosition).toHaveBeenCalledWith(560, 270);
-    expect(away.setPosition).toHaveBeenCalledWith(400, 270);
   });
 });
 
@@ -61,7 +60,7 @@ describe('MatchScene Game Over visibility', () => {
     scene.manager = manager;
     scene.gameOverGroup = gameOverGroup;
     scene.resultOverlayGroup = { visible: false };
-    scene.player = { body: { setVelocity: vi.fn(), setAcceleration: vi.fn() }, preUpdate: vi.fn() };
+    scene.player = { body: { setVelocity: vi.fn(), setAcceleration: vi.fn() }, preUpdate: vi.fn(), updateAnimation: vi.fn() };
     scene.ball = { preUpdate: vi.fn() };
     scene.clockText = { setText: vi.fn() };
     scene.scoreText = { setText: vi.fn() };

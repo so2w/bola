@@ -1,3 +1,5 @@
+import { FORMATIONS, anchorCoords, type AnchorCoord, type FormationId } from '../data/formations';
+
 export type FormationType = '4-4-2' | '4-3-3' | '3-5-2';
 
 export interface Position2D {
@@ -5,6 +7,8 @@ export interface Position2D {
   y: number;
   role: 'GK' | 'DF' | 'MF' | 'FW';
 }
+
+export type Anchor2D = AnchorCoord;
 
 export class FormationSystem {
   public static getPositions(formation: FormationType, side: 'home' | 'away', pitchW = 960, pitchH = 540): Position2D[] {
@@ -34,5 +38,13 @@ export class FormationSystem {
 
     // Default 4-4-2 fallback
     return FormationSystem.getPositions('4-4-2', side, pitchW, pitchH);
+  }
+
+  /**
+   * Converts data-driven normalized formation anchors to absolute pitch coords.
+   * Home team: x = nx * pitchW. Away team: mirrored horizontally.
+   */
+  public static anchors(formationId: FormationId, side: 'home' | 'away', pitchW = 960, pitchH = 540): Anchor2D[] {
+    return anchorCoords(FORMATIONS[formationId], side, pitchW, pitchH);
   }
 }

@@ -1,26 +1,43 @@
 import Phaser from 'phaser';
 import { Player } from '../entities/Player';
 import { Ball } from '../entities/Ball';
-import { SimpleAI } from '../systems/SimpleAI';
 import { MatchManager } from '../systems/MatchManager';
 import { CameraController } from '../match/CameraController';
 import { PlayerSelectionSystem } from '../match/PlayerSelectionSystem';
+import { PossessionSystem } from '../match/PossessionSystem';
+import { HumanInputController } from '../input/HumanInputController';
+import { AIController } from '../input/AIController';
+import { TeamCoordinator } from '../ai/TeamCoordinator';
+import { FORMATIONS, anchorCoords } from '../data/formations';
+import type { AICommand, BallSnapshot, EntitySnapshot } from '../ai/commands';
 
 /** Frame index inside the players sheet = position in manifest.spritesheets.players.frames. */
 const HOME_RUN_FRAME = 1;
 
 /**
- * MatchScene — Core gameplay wiring for Paso 2.
- * Renders pitch, instantiates Player and Ball entities, delegates preUpdate.
+ * MatchScene — core gameplay wiring for Fase 2 (small-sided 3v3).
+ * Renders pitch, builds both teams at data-driven formation anchors, wires
+ * TeamCoordinators (150ms cadence + per-frame GK), possession, automatic
+ * selection with controller swap, and per-frame locomotion from AI commands.
  */
 export class MatchScene extends Phaser.Scene {
   private player!: Player;
   private ball!: Ball;
-  private rival?: Player;
-  private ai?: SimpleAI;
+  private homeTeam: Player[] = [];
+  private awayTeam: Player[] = [];
+  private roles: { home: string[]; away: string[] } = { home: [], away: [] };
+  private homeByIndex = new Map<string, Player>();
+  private awayByIndex = new Map<string, Player>();
+  private aiControllers = new Map<string, AIController>();
+  private awayControllers = new Map<string, AIController>();
+  private humanController?: HumanInputController;
+  private humanPlayerId: string | null = null;
   private manager?: MatchManager;
   private cameraController?: CameraController;
   private selectionSystem?: PlayerSelectionSystem;
+  private possession?: PossessionSystem;
+  private coordinatorHome?: TeamCoordinator;
+  private coordinatorAway?: TeamCoordinator;
   private clockText!: Phaser.GameObjects.Text;
   private scoreText!: Phaser.GameObjects.Text;
   private leftGoal!: Phaser.GameObjects.Zone;
@@ -40,23 +57,54 @@ export class MatchScene extends Phaser.Scene {
     // World bounds for Arcade physics
     this.physics.world.setBounds(0, 0, 960, 540);
 
-    // Instantiate entities
+    // Ball
     this.ball = new Ball(this, 480, 270);
-    this.player = new Player(this, 560, 270);
 
-    // Rival instantiation
-    this.rival = new Player(this, 400, 270);
-    this.rival.sprite.setTint(0x0000ff);
-    this.ai = new SimpleAI();
+    // 3v3 teams placed at data-driven formation anchors
+    const homeCoords = anchorCoords(FORMATIONS['3v3'], 'home', 960, 540);
+    const awayCoords = anchorCoords(FORMATIONS['3v3'], 'away', 960, 540);
+    this.roles = {
+      home: homeCoords.map((a) => a.role),
+      away: awayCoords.map((a) => a.role),
+    };
+
+    this.homeTeam = homeCoords.map((a) => new Player(this, a.x, a.y));
+    this.awayTeam = awayCoords.map((a) => {
+      const p = new Player(this, a.x, a.y);
+      p.sprite.setTint(0x0000ff);
+      return p;
+    });
+
+    this.homeByIndex = new Map(this.homeTeam.map((p, i) => [`home-${i}`, p]));
+    this.awayByIndex = new Map(this.awayTeam.map((p, i) => [`away-${i}`, p]));
+
+    // Controllers: every player gets an AIController with kick wiring
+    for (const [id, p] of this.homeByIndex) {
+      const ai = new AIController((cmd) => this.handleAIKick(p, cmd));
+      p.attachController(ai);
+      this.aiControllers.set(id, ai);
+    }
+    for (const [id, p] of this.awayByIndex) {
+      const ai = new AIController((cmd) => this.handleAIKick(p, cmd));
+      p.attachController(ai);
+      this.awayControllers.set(id, ai);
+    }
+
+    // Human controller — attached when the selection system decides
+    this.humanController = new HumanInputController();
+    this.player = this.homeTeam[this.homeTeam.length - 1];
+    this.humanPlayerId = null;
+
+    // Systems
     this.manager = new MatchManager();
+    this.manager.bind(this, this.ball, this.homeTeam, this.awayTeam, { home: '3v3', away: '3v3' });
     this.cameraController = new CameraController(this.cameras.main);
     this.selectionSystem = new PlayerSelectionSystem();
-
-    // Bind manager context for goal detection and reset
-    this.manager.bind(this, this.ball, this.player, this.rival);
+    this.possession = new PossessionSystem();
+    this.coordinatorHome = new TeamCoordinator('home', FORMATIONS['3v3']);
+    this.coordinatorAway = new TeamCoordinator('away', FORMATIONS['3v3']);
 
     // Scoring orientation: left zone = away scores, right zone = home scores
-    // Invisible Arcade static goal zones
     this.leftGoal = this.add.zone(20, 270, 40, 140);
     this.rightGoal = this.add.zone(940, 270, 40, 140);
     this.physics.world.enable([this.leftGoal, this.rightGoal]);
@@ -65,7 +113,6 @@ export class MatchScene extends Phaser.Scene {
     this.leftGoal.setVisible(false);
     this.rightGoal.setVisible(false);
 
-    // Wire Arcade overlap for goal detection
     this.physics.add.overlap(this.ball.sprite, this.leftGoal, () => {
       if (this.manager?.state === 'PLAYING') {
         this.manager.handleGoal('away');
@@ -77,26 +124,6 @@ export class MatchScene extends Phaser.Scene {
         this.manager.handleGoal('home');
       }
     }, undefined, this);
-
-    // Wire shot event from Player to Ball
-    this.player.onShot((power, facing) => {
-      this.ball.applyKick(facing, power);
-      if (power > 0.6) {
-        const magnitude = Phaser.Math.Clamp(power * 0.02, 0.008, 0.02);
-        this.cameras.main.shake(100, magnitude);
-      }
-    });
-
-    // Wire shot event from Rival to Ball
-    if (this.rival) {
-      this.rival.onShot((power, facing) => {
-        this.ball.applyKick(facing, power);
-        if (power > 0.6) {
-          const magnitude = Phaser.Math.Clamp(power * 0.02, 0.008, 0.02);
-          this.cameras.main.shake(100, magnitude);
-        }
-      });
-    }
 
     // HUD
     this.clockText = this.add.text(20, 20, '03:00', {
@@ -151,7 +178,6 @@ export class MatchScene extends Phaser.Scene {
     });
     this.gameOverGroup.add([goBg, goTitle, goScore, goRestart]);
     this.gameOverGroup.setVisible(false);
-    // Store references for updates
     (this.gameOverGroup as any).scoreText = goScore;
 
     // Result overlay group
@@ -188,6 +214,11 @@ export class MatchScene extends Phaser.Scene {
         this.gameOverGroup.setVisible(false);
       }
     });
+
+    // Wire shot events for every player
+    for (const p of [...this.homeTeam, ...this.awayTeam]) {
+      this.wireShots(p);
+    }
   }
 
   update(time: number, delta: number): void {
@@ -196,26 +227,98 @@ export class MatchScene extends Phaser.Scene {
       this.manager.update(delta);
     }
 
-    // AI update
-    if (this.ai && this.rival && this.ball && this.manager) {
-      this.ai.update(delta, this.rival, this.ball, this.manager);
-    }
-
     const isPlaying = this.manager?.state === 'PLAYING';
     const resultOverlayVisible = this.resultOverlayGroup?.visible ?? false;
-
-    // Gate player input and zero velocities when not PLAYING or overlay visible
     const canPlay = isPlaying && !resultOverlayVisible;
-    if (!canPlay) {
-      this.player.body.setVelocity(0, 0);
-      this.player.body.setAcceleration(0, 0);
+
+    // Team AI: snapshots → coordinators → commands
+    if (this.coordinatorHome && this.coordinatorAway && this.ball && this.possession) {
+      const homeSnaps = this.buildSnaps(this.homeTeam, 'home');
+      const awaySnaps = this.buildSnaps(this.awayTeam, 'away');
+      const ballSnap = this.buildBallSnap();
+
+      // Possession per frame (domain-only wiring; consumed by coordinators)
+      this.possession.update(delta, [...homeSnaps, ...awaySnaps], ballSnap);
+
+      const homeCmds = this.coordinatorHome.update(time, homeSnaps, ballSnap, this.possession);
+      const awayCmds = this.coordinatorAway.update(time, awaySnaps, ballSnap, this.possession);
+
+      // Per-frame GK evaluation (design 3.0: NEVER inside the 150ms cadence)
+      const gkHome = homeSnaps.find((s) => s.role === 'GK');
+      const gkAway = awaySnaps.find((s) => s.role === 'GK');
+      if (gkHome) {
+        this.coordinatorHome.tickGK(delta, gkHome, {
+          ball: ballSnap,
+          teammates: homeSnaps.filter((s) => s.role !== 'GK'),
+          opponents: awaySnaps,
+          attackDir: 1,
+        });
+      }
+      if (gkAway) {
+        this.coordinatorAway.tickGK(delta, gkAway, {
+          ball: ballSnap,
+          teammates: awaySnaps.filter((s) => s.role !== 'GK'),
+          opponents: homeSnaps,
+          attackDir: -1,
+        });
+      }
+
+      // Automatic selection (human) — home field players only, GK excluded
+      if (canPlay && this.selectionSystem) {
+        const candidates = homeSnaps
+          .filter((s) => s.role !== 'GK')
+          .map((s) => ({ id: s.id, x: s.x, y: s.y, role: s.role }));
+        const selectedId = this.selectionSystem.update(
+          delta,
+          candidates,
+          { x: ballSnap.x, y: ballSnap.y },
+          { x: ballSnap.vx, y: ballSnap.vy },
+        );
+        if (selectedId) {
+          this.swapToHuman(selectedId);
+        }
+      }
+
+      // Apply commands to AI controllers; selected human player is exempt
+      if (canPlay) {
+        for (const [id, ai] of this.aiControllers) {
+          if (id !== this.humanPlayerId) {
+            ai.setCommand(homeCmds.get(id));
+          }
+        }
+        for (const [id, ai] of this.awayControllers) {
+          ai.setCommand(awayCmds.get(id));
+        }
+      }
     }
 
-    // Entities preUpdate — only process player input when playing and no overlay
+    // Controllers update (human + AI locomotion) — gated when not playing
+    const controlled = this.player;
     if (canPlay) {
-      this.player.preUpdate(time, delta);
+      for (const p of this.homeTeam) {
+        p.updateController(delta);
+      }
+      for (const p of this.awayTeam) {
+        p.updateController(delta);
+      }
     } else {
-      this.player['updateAnimation']?.();
+      for (const p of [...this.homeTeam, ...this.awayTeam]) {
+        p.body.setVelocity(0, 0);
+        p.body.setAcceleration(0, 0);
+      }
+      if (controlled) {
+        controlled.body.setVelocity(0, 0);
+        controlled.body.setAcceleration(0, 0);
+      }
+    }
+
+    // Controlled player preUpdate (charge + animation)
+    if (controlled) {
+      if (canPlay) {
+        controlled.preUpdate(time, delta);
+      } else {
+        controlled.updateAnimation();
+      }
     }
     this.ball.preUpdate(time, delta);
 
@@ -250,6 +353,73 @@ export class MatchScene extends Phaser.Scene {
       }
     }
   }
+
+  /** Builds entity snapshots in anchor order (TeamCoordinator contract). */
+  private buildSnaps(team: Player[], side: 'home' | 'away'): EntitySnapshot[] {
+    return team.map((p, i) => ({
+      id: `${side}-${i}`,
+      team: side,
+      role: (this.roles[side][i] ?? 'FW') as EntitySnapshot['role'],
+      x: p.sprite.x,
+      y: p.sprite.y,
+      vx: p.body.velocity.x,
+      vy: p.body.velocity.y,
+    }));
+  }
+
+  private buildBallSnap(): BallSnapshot {
+    return {
+      x: this.ball.sprite.x,
+      y: this.ball.sprite.y,
+      z: this.ball.z,
+      vx: this.ball.body.velocity.x,
+      vy: this.ball.body.velocity.y,
+    };
+  }
+
+  /** Swaps the human controller onto the newly selected player (one controller per Player). */
+  private swapToHuman(newId: string): void {
+    if (this.humanPlayerId === newId || !this.humanController) {
+      return;
+    }
+    // Previous human player back to AI
+    if (this.humanPlayerId) {
+      const old = this.homeByIndex.get(this.humanPlayerId);
+      const oldAI = this.aiControllers.get(this.humanPlayerId);
+      if (old && oldAI) {
+        old.attachController(oldAI);
+      }
+    }
+    const next = this.homeByIndex.get(newId);
+    if (next) {
+      next.attachController(this.humanController);
+      this.player = next;
+      this.humanPlayerId = newId;
+    }
+  }
+
+  /** AI kick dispatch: SHOOT/PASS/DISTRIBUTE trigger a guarded kick toward the command target. */
+  private handleAIKick(p: Player, cmd: AICommand): void {
+    if (cmd.action !== 'SHOOT' && cmd.action !== 'PASS' && cmd.action !== 'DISTRIBUTE') {
+      return;
+    }
+    const dx = cmd.targetX - p.sprite.x;
+    const dy = cmd.targetY - p.sprite.y;
+    const facing = new Phaser.Math.Vector2(dx, dy);
+    if (facing.lengthSq() > 0) {
+      facing.normalize();
+    }
+    p.shootWithPower(cmd.power ?? 0.3, facing);
+  }
+
+  private wireShots(p: Player): void {
+    p.onShot((power, facing) => {
+      this.possession?.onKick();
+      this.ball.applyKick(facing, power);
+      if (power > 0.6) {
+        const magnitude = Phaser.Math.Clamp(power * 0.02, 0.008, 0.02);
+        this.cameras.main.shake(100, magnitude);
+      }
+    });
+  }
 }
-
-

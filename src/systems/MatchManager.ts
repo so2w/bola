@@ -1,12 +1,8 @@
-/**
- * TODO: MatchManager — implement in a later change per AGENTS.md Subsystem 4
- * (Match Engine & Game Loop Manager).
- *
- * Planned responsibilities (NOT implemented in Paso 1):
- * - Global referee state machine: KICKOFF -> PLAYING -> GOAL -> OUT_OF_BOUNDS -> GAME_OVER.
- * - Match clock: 3 real minutes (1 real second = 3 game seconds).
- * - Goal detection areas, score tracking, "GOAL!" effect, kickoff repositioning.
- */
+import type { FormationId } from '../data/formations';
+import { FormationSystem } from '../match/FormationSystem';
+import type { Ball } from '../entities/Ball';
+import type { Player } from '../entities/Player';
+
 export type MatchState =
   | 'BOOT'
   | 'INTRO'
@@ -21,29 +17,47 @@ export type MatchState =
   | 'OUT_OF_BOUNDS'
   | 'GAME_OVER';
 
+export interface MatchFormations {
+  home: FormationId;
+  away: FormationId;
+}
+
+/**
+ * Referee state machine + match clock (AGENTS.md §7). Deterministic and
+ * testable: kickoff/goal/reset timers flow from config through bind().
+ * Teams are arrays placed at data-driven formation anchors (no hardcoded coords).
+ */
 export class MatchManager {
   public state: MatchState = 'KICKOFF';
-  public timeRemaining = 540; // game seconds: 3 real minutes *3
+  public timeRemaining = 540; // game seconds: 3 real minutes * 3
   public score = { home: 0, away: 0 };
   public kickoffTimer = 1500;
   public resetTimer = 0;
 
   private scene?: Phaser.Scene;
-  private ball?: any;
-  private homePlayer?: any;
-  private awayPlayer?: any;
+  private ball?: Ball;
+  private homeTeam: Player[] = [];
+  private awayTeam: Player[] = [];
+  private formations: MatchFormations = { home: '3v3', away: '3v3' };
 
   constructor() {}
 
-  public bind(scene: Phaser.Scene, ball: any, homePlayer: any, awayPlayer: any): void {
+  public bind(
+    scene: Phaser.Scene,
+    ball: Ball,
+    homeTeam: Player[],
+    awayTeam: Player[],
+    formations: MatchFormations,
+  ): void {
     this.scene = scene;
     this.ball = ball;
-    this.homePlayer = homePlayer;
-    this.awayPlayer = awayPlayer;
+    this.homeTeam = homeTeam;
+    this.awayTeam = awayTeam;
+    this.formations = formations;
   }
 
   public update(delta: number): void {
-    // KICKOFF → PLAYING after 1.5s
+    // KICKOFF → PLAYING after the kickoff pause
     if (this.state === 'KICKOFF') {
       this.kickoffTimer -= delta;
       if (this.kickTimerExpired()) {
@@ -138,26 +152,38 @@ export class MatchManager {
     if (this.ball?.body) {
       this.ball.body.setVelocity(0, 0);
     }
-    if (this.homePlayer?.body) {
-      this.homePlayer.body.setVelocity(0, 0);
+    for (const p of this.homeTeam) {
+      p.body?.setVelocity(0, 0);
     }
-    if (this.awayPlayer?.body) {
-      this.awayPlayer.body.setVelocity(0, 0);
+    for (const p of this.awayTeam) {
+      p.body?.setVelocity(0, 0);
     }
   }
 
-  private resetMatch(): void {
+  /** Places every player at its formation anchor (data-driven, no hardcoded coords). */
+  private resetPositions(): void {
     if (this.ball?.reset) {
       this.ball.reset();
     }
-    if (this.homePlayer?.setPosition) {
-      this.homePlayer.setPosition(560, 270);
-    }
-    if (this.awayPlayer?.setPosition) {
-      this.awayPlayer.setPosition(400, 270);
-    }
+    const homeAnchors = FormationSystem.anchors(this.formations.home, 'home');
+    const awayAnchors = FormationSystem.anchors(this.formations.away, 'away');
+    this.homeTeam.forEach((p, i) => {
+      const a = homeAnchors[i];
+      if (a) {
+        p.setPosition(a.x, a.y);
+      }
+    });
+    this.awayTeam.forEach((p, i) => {
+      const a = awayAnchors[i];
+      if (a) {
+        p.setPosition(a.x, a.y);
+      }
+    });
     this.freezeEntities();
+  }
 
+  private resetMatch(): void {
+    this.resetPositions();
     this.state = 'KICKOFF';
     this.kickoffTimer = 1500;
   }
@@ -168,17 +194,7 @@ export class MatchManager {
     this.resetTimer = 0;
     this.state = 'KICKOFF';
     this.kickoffTimer = 1500;
-
-    if (this.ball?.reset) {
-      this.ball.reset();
-    }
-    if (this.homePlayer?.setPosition) {
-      this.homePlayer.setPosition(560, 270);
-    }
-    if (this.awayPlayer?.setPosition) {
-      this.awayPlayer.setPosition(400, 270);
-    }
-    this.freezeEntities();
+    this.resetPositions();
   }
 
   public getTime(): number {
