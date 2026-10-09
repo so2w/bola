@@ -27,7 +27,6 @@ export const BALANCE_CONFIG = {
     POSSESSABLE_Z: 15,
     CONTROL_RADIUS_PX: 22,
     PRESS_COUNT_MAX: 2,
-    GK_HOLD_MS: 700,
     SHOOT_RANGE_PX: 120,
   },
   SELECTION: {
@@ -45,5 +44,6 @@ export const BALANCE_CONFIG = {
     DIVE_RADIUS_PX: 120,
     DIVE_TRIGGER_SPEED: 200,
     DIVE_DURATION_MS: 400,
+    GK_HOLD_MS: 700,
   },
 };

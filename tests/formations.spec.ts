@@ -71,7 +71,6 @@ describe('balance config groups (compile test)', () => {
     expect(BALANCE_CONFIG.AI.POSSESSABLE_Z).toBeLessThan(BALANCE_CONFIG.PHYSICS.BALL_MAX_Z);
     expect(BALANCE_CONFIG.AI.CAPTURE_RADIUS_PX).toBeGreaterThan(0);
     expect(BALANCE_CONFIG.AI.CONTROL_RADIUS_PX).toBeGreaterThan(0);
-    expect(BALANCE_CONFIG.AI.GK_HOLD_MS).toBeGreaterThan(0);
 
     expect(BALANCE_CONFIG.SELECTION.COOLDOWN_MS).toBe(300);
     expect(BALANCE_CONFIG.SELECTION.HYSTERESIS_PX).toBe(150);
@@ -83,6 +82,7 @@ describe('balance config groups (compile test)', () => {
     expect(BALANCE_CONFIG.GK.DIVE_TRIGGER_SPEED).toBeGreaterThan(0);
     expect(BALANCE_CONFIG.GK.DIVE_RADIUS_PX).toBeLessThan(BALANCE_CONFIG.GK.TRACK_RADIUS_PX);
     expect(BALANCE_CONFIG.GK.DIVE_DURATION_MS).toBeGreaterThan(0);
+    expect(BALANCE_CONFIG.GK.GK_HOLD_MS).toBeGreaterThan(0);
     expect(BALANCE_CONFIG.GK.CLAIM_RADIUS_PX).toBeGreaterThan(0);
   });
 });
