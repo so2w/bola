@@ -26,7 +26,9 @@ function teammates(): EntitySnapshot[] {
 function opponents(): EntitySnapshot[] {
   return [
     { id: 'away-1', team: 'away', role: 'DF', x: 624, y: 270, vx: 0, vy: 0 },
-    { id: 'away-2', team: 'away', role: 'FW', x: 365, y: 270, vx: 0, vy: 0 },
+    // Asymmetric fixture: away-2 sits 114px from home DF but only 29px from home FW,
+    // so the DF is STRICTLY the most open teammate (no iteration-order tie).
+    { id: 'away-2', team: 'away', role: 'FW', x: 450, y: 270, vx: 0, vy: 0 },
   ];
 }
 
@@ -115,10 +117,10 @@ describe('GoalkeeperAI — full FSM', () => {
     }
     expect(cmd.action).toBe('DISTRIBUTE');
     expect(ai.state).toBe('RECOVER');
-    // Most open teammate: home-1 (DF at 336,270) or home-2 (FW at 595,270) tie
-    // (29px from nearest opponent each); strict comparison keeps the first deterministically.
-    const targets = [336, 595];
-    expect(targets).toContain(cmd.targetX);
+    // Asymmetric fixture: home-1 (DF, 336) is 114px from its nearest opponent;
+    // home-2 (FW, 595) is only 29px from its marker → the DF is strictly most open.
+    expect(cmd.targetX).toBe(336);
+    expect(cmd.targetY).toBe(270);
 
     // DISTRIBUTE is followed by RECOVER (walk back)
     const recover = ai.tick(16, atBall, ctx(ball(57.6 + 30, 270)));

@@ -95,4 +95,17 @@ describe('PossessionSystem', () => {
 
     expect(result).toBe('p1');
   });
+
+  it('boundary is inclusive: z == POSSESSABLE_Z captures, just above does not', () => {
+    const sys = new PossessionSystem();
+    const players = [snap('p1', 100, 100)];
+    const z = BALANCE_CONFIG.AI.POSSESSABLE_Z;
+
+    // Exactly at the boundary → possessable (<=)
+    expect(sys.update(16, players, ballAt(100, 100, z))).toBe('p1');
+
+    sys.onKick();
+    // A hair above the boundary → no capture
+    expect(sys.update(16, players, ballAt(100, 100, z + 0.001))).toBeNull();
+  });
 });

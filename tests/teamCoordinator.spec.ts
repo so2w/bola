@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { TeamCoordinator } from '../src/ai/TeamCoordinator';
+import { FootballAI } from '../src/ai/FootballAI';
 import { PossessionSystem } from '../src/match/PossessionSystem';
 import { FORMATIONS, anchorCoords, type FormationId } from '../src/data/formations';
 import { mulberry32 } from '../src/utils/rng';
@@ -119,6 +120,59 @@ describe('TeamCoordinator — press coordination (Fase 2 gate)', () => {
     const commands = coord.update(0, snaps, ballAt(336, 270), possession);
     const pressers = [...commands.values()].filter((c) => c.action === 'PRESS');
     expect(pressers).toHaveLength(0);
+  });
+
+  it('emergent shape: entity-level simulation never converges on the ball (≤2 players near it)', () => {
+    // Unlike the command-level tests above, this moves the actual entities each
+    // frame (per-frame locomotion from coordinator commands) and asserts the
+    // EMERGENT result over 10 sim-seconds: at most 2 players ever sit near the
+    // ball, presser assignment stays capped, and possession cycles dynamically.
+    const coord = new TeamCoordinator('home', FORMATIONS['5v5'], mulberry32(42));
+    const possession = new PossessionSystem();
+    // Standalone FootballAI used only for its pure applyLocomotion math
+    const locomotor = new FootballAI(mulberry32(1));
+    const snaps = teamSnapshots('5v5', 'home').map((s) => ({ ...s }));
+    const ball = ballAt(100, 100);
+    const FRAME_MS = 16;
+
+    let maxNearBall = 0;
+    let maxPressers = 0;
+    let possessionCaptured = false;
+
+    for (let frame = 0; frame < Math.ceil(10_000 / FRAME_MS); frame++) {
+      const nowMs = (frame + 1) * FRAME_MS;
+      const commands = coord.update(nowMs, snaps, ball, possession);
+
+      if (possession.possessorId !== null) {
+        possessionCaptured = true;
+      }
+
+      let pressers = 0;
+      for (const [, cmd] of commands) {
+        if (cmd.action === 'PRESS') pressers++;
+      }
+      maxPressers = Math.max(maxPressers, pressers);
+
+      // Emergent convergence check BEFORE moving this frame's entities
+      let nearBall = 0;
+      for (const s of snaps) {
+        if (Math.hypot(s.x - ball.x, s.y - ball.y) <= 40) nearBall++;
+      }
+      maxNearBall = Math.max(maxNearBall, nearBall);
+
+      // Per-frame locomotion from the last issued command
+      for (const [id, cmd] of commands) {
+        const snap = snaps.find((s) => s.id === id);
+        if (!snap) continue;
+        const v = locomotor.applyLocomotion(cmd, snap);
+        snap.x += (v.vx * FRAME_MS) / 1000;
+        snap.y += (v.vy * FRAME_MS) / 1000;
+      }
+    }
+
+    expect(maxPressers).toBeLessThanOrEqual(AI.PRESS_COUNT_MAX);
+    expect(maxNearBall).toBeLessThanOrEqual(2); // Fase 2 gate, entity-level
+    expect(possessionCaptured).toBe(true); // dynamic cycle: presser reached the ball
   });
 });
 
