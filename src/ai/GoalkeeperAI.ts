@@ -1,6 +1,6 @@
 import { BALANCE_CONFIG } from '../data/balance';
 import type { AICommand, BallSnapshot, EntitySnapshot } from './commands';
-import type { Rng } from '../utils/rng';
+import { mulberry32, type Rng } from '../utils/rng';
 
 /** Full keeper FSM (AGENTS.md §11). */
 export type GKState = 'POSITION' | 'TRACK' | 'CLAIM' | 'DIVE' | 'HOLD' | 'DISTRIBUTE' | 'RECOVER';

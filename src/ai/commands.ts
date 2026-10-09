@@ -8,6 +8,8 @@ export type AIAction =
   | 'TACKLE'
   | 'DIVE'
   | 'CLAIM'
+  | 'HOLD'
+  | 'TRACK'
   | 'DISTRIBUTE'
   | 'IDLE';
 

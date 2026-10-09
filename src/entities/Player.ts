@@ -48,6 +48,11 @@ export class Player {
     return this.controller !== undefined;
   }
 
+  /** Updates the attached controller (called every frame by the scene). */
+  public updateController(dtMs: number): void {
+    this.controller?.update(dtMs);
+  }
+
   private createAnimations(): void {
     if (!this.scene.anims.exists('player_idle')) {
       this.scene.anims.create({

@@ -13,6 +13,7 @@ export class HumanInputController implements IPlayerController {
     s?: Phaser.Input.Keyboard.Key;
     d?: Phaser.Input.Keyboard.Key;
   };
+  private shotListenersRegistered = false;
 
   public attach(scene: Phaser.Scene, player: Player): void {
     this.player = player;
@@ -27,14 +28,17 @@ export class HumanInputController implements IPlayerController {
     this.keys.s = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.S);
     this.keys.d = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.D);
 
-    // Shot key
-    const shotKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
-    shotKey.on('down', () => {
-      this.player?.startCharge();
-    });
-    shotKey.on('up', () => {
-      this.player?.releaseCharge();
-    });
+    // Shot key — listeners registered once; re-attach only rebinds the player
+    if (!this.shotListenersRegistered) {
+      const shotKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
+      shotKey.on('down', () => {
+        this.player?.startCharge();
+      });
+      shotKey.on('up', () => {
+        this.player?.releaseCharge();
+      });
+      this.shotListenersRegistered = true;
+    }
   }
 
   public update(_dtMs: number): void {

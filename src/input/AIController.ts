@@ -16,7 +16,7 @@ export class AIController implements IPlayerController {
     this.onAction = onAction;
   }
 
-  public setCommand(cmd: AICommand): void {
+  public setCommand(cmd: AICommand | undefined): void {
     this.command = cmd;
   }
 
