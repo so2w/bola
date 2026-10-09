@@ -5,6 +5,7 @@ import { SimpleAI } from '../systems/SimpleAI';
 import { MatchManager } from '../systems/MatchManager';
 import { CameraController } from '../match/CameraController';
 import { PlayerSelectionSystem } from '../match/PlayerSelectionSystem';
+import { HumanInputController } from '../input/HumanInputController';
 
 /** Frame index inside the players sheet = position in manifest.spritesheets.players.frames. */
 const HOME_RUN_FRAME = 1;
@@ -15,6 +16,7 @@ const HOME_RUN_FRAME = 1;
  */
 export class MatchScene extends Phaser.Scene {
   private player!: Player;
+  private playerController?: HumanInputController;
   private ball!: Ball;
   private rival?: Player;
   private ai?: SimpleAI;
@@ -43,6 +45,8 @@ export class MatchScene extends Phaser.Scene {
     // Instantiate entities
     this.ball = new Ball(this, 480, 270);
     this.player = new Player(this, 560, 270);
+    this.playerController = new HumanInputController();
+    this.player.attachController(this.playerController);
 
     // Rival instantiation
     this.rival = new Player(this, 400, 270);
@@ -213,6 +217,7 @@ export class MatchScene extends Phaser.Scene {
 
     // Entities preUpdate — only process player input when playing and no overlay
     if (canPlay) {
+      this.playerController?.update(delta);
       this.player.preUpdate(time, delta);
     } else {
       this.player['updateAnimation']?.();

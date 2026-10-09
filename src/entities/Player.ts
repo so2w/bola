@@ -2,11 +2,20 @@ import Phaser from 'phaser';
 
 type AnimState = 'Idle' | 'Run' | 'Kick';
 
+/**
+ * Controller contract: one controller per Player instance.
+ * Player entity contains NO input code — controllers drive it via move/charge APIs.
+ */
+export interface IPlayerController {
+  attach(scene: Phaser.Scene, player: Player): void;
+  /** Called every frame by the scene; sets body velocity / triggers kicks via player APIs. */
+  update(dtMs: number): void;
+}
+
 export class Player {
   public scene: Phaser.Scene;
   public body: Phaser.Physics.Arcade.Body;
   public sprite: Phaser.GameObjects.Sprite;
-  public inputKeys: Phaser.Types.Input.Keyboard.CursorKeys & { w?: Phaser.Input.Keyboard.Key; a?: Phaser.Input.Keyboard.Key; s?: Phaser.Input.Keyboard.Key; d?: Phaser.Input.Keyboard.Key };
   public animState: AnimState = 'Idle';
   public chargeTimer = 0;
   public maxSpeed = 220;
@@ -14,6 +23,7 @@ export class Player {
   private kickDuration = 200;
   private kickTimer = 0;
   private isCharging = false;
+  private controller?: IPlayerController;
   private shotCallback?: (power: number, facing: Phaser.Math.Vector2) => void;
 
   constructor(scene: Phaser.Scene, x: number, y: number) {
@@ -25,35 +35,17 @@ export class Player {
     this.body.setCollideWorldBounds(true);
     this.body.setDrag(0.8);
 
-    if (!scene.input || !scene.input.keyboard) {
-      throw new Error('Keyboard plugin is not enabled or available in scene');
-    }
-    this.inputKeys = scene.input.keyboard.createCursorKeys();
-    // WASD fallback
-    this.inputKeys.w = scene.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.W);
-    this.inputKeys.a = scene.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.A);
-    this.inputKeys.s = scene.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.S);
-    this.inputKeys.d = scene.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.D);
-
-    // Shot key
-    const shotKey = scene.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
-    
-    shotKey.on('down', () => {
-      this.isCharging = true;
-      this.chargeTimer = 0;
-    });
-    shotKey.on('up', () => {
-      if (this.isCharging) {
-        const power = Phaser.Math.Clamp(this.chargeTimer / this.maxCharge, 0, 1);
-        const facing = this.getFacing();
-        this.startKick();
-        this.chargeTimer = 0;
-        this.isCharging = false;
-        this.shotCallback?.(power, facing);
-      }
-    });
-
     this.createAnimations();
+  }
+
+  /** Attaches exactly one controller. Replaces any previous one. */
+  public attachController(controller: IPlayerController): void {
+    this.controller = controller;
+    controller.attach(this.scene, this);
+  }
+
+  public hasController(): boolean {
+    return this.controller !== undefined;
   }
 
   private createAnimations(): void {
@@ -84,35 +76,47 @@ export class Player {
     }
   }
 
+  /** Runs charge progress + animation. Called every frame by the scene. */
   public preUpdate(time: number, delta: number): void {
-    this.updateInput();
-    this.updateMovement();
+    void time;
     this.updateCharge(delta);
     this.updateAnimation();
   }
 
-  private updateInput(): void {
-    const keys = this.inputKeys;
-    const left = keys.left?.isDown || keys.a?.isDown;
-    const right = keys.right?.isDown || keys.d?.isDown;
-    const up = keys.up?.isDown || keys.w?.isDown;
-    const down = keys.down?.isDown || keys.s?.isDown;
-
-    const inputVec = new Phaser.Math.Vector2(
-      (right ? 1 : 0) - (left ? 1 : 0),
-      (down ? 1 : 0) - (up ? 1 : 0)
-    );
-
-    if (inputVec.lengthSq() > 0) {
-      inputVec.normalize();
-      this.body.setVelocity(inputVec.x * this.maxSpeed, inputVec.y * this.maxSpeed);
+  /**
+   * Sets body velocity toward the input vector, normalized to maxSpeed.
+   * Shared by HumanInputController and AIController.
+   */
+  public move(vec: { x: number; y: number }): void {
+    const lenSq = vec.x * vec.x + vec.y * vec.y;
+    if (lenSq > 0) {
+      const len = Math.sqrt(lenSq);
+      this.body.setVelocity((vec.x / len) * this.maxSpeed, (vec.y / len) * this.maxSpeed);
     } else {
       this.body.setVelocity(0, 0);
     }
   }
 
-  private updateMovement(): void {
-    // Velocity already set in updateInput via Arcade body
+  /** Begins charge accumulation (controller calls on shot-key down). */
+  public startCharge(): void {
+    this.isCharging = true;
+    this.chargeTimer = 0;
+  }
+
+  /**
+   * Releases the charge (controller calls on shot-key up): computes power and
+   * facing, starts the kick animation and fires the shot callback.
+   */
+  public releaseCharge(): void {
+    if (!this.isCharging) {
+      return;
+    }
+    const power = Phaser.Math.Clamp(this.chargeTimer / this.maxCharge, 0, 1);
+    const facing = this.getFacing();
+    this.startKick();
+    this.chargeTimer = 0;
+    this.isCharging = false;
+    this.shotCallback?.(power, facing);
   }
 
   private updateCharge(delta: number): void {
@@ -121,7 +125,7 @@ export class Player {
     }
   }
 
-  private updateAnimation(): void {
+  public updateAnimation(): void {
     if (this.kickTimer > 0) {
       this.kickTimer -= this.scene.game.loop.delta;
       if (this.kickTimer <= 0) {
@@ -139,12 +143,12 @@ export class Player {
     const moving = this.body.velocity.lengthSq() > 0;
     if (moving) {
       this.animState = 'Run';
-      if (this.sprite.anims.currentAnim?.key !== 'player_run') {
+      if (!this.sprite.anims.isPlaying || this.sprite.anims.currentAnim?.key !== 'player_run') {
         this.sprite.anims.play('player_run', true);
       }
     } else {
       this.animState = 'Idle';
-      if (this.sprite.anims.currentAnim?.key !== 'player_idle') {
+      if (!this.sprite.anims.isPlaying || this.sprite.anims.currentAnim?.key !== 'player_idle') {
         this.sprite.anims.play('player_idle', true);
       }
     }
