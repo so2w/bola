@@ -1,9 +1,18 @@
+import { FORMATIONS, type FormationId, type FormationSlot, type Role } from '../data/formations';
+
 export type FormationType = '4-4-2' | '4-3-3' | '3-5-2';
 
 export interface Position2D {
   x: number;
   y: number;
   role: 'GK' | 'DF' | 'MF' | 'FW';
+}
+
+export interface Anchor2D {
+  x: number;
+  y: number;
+  role: Role;
+  slot: string;
 }
 
 export class FormationSystem {
@@ -34,5 +43,20 @@ export class FormationSystem {
 
     // Default 4-4-2 fallback
     return FormationSystem.getPositions('4-4-2', side, pitchW, pitchH);
+  }
+
+  /**
+   * Converts data-driven normalized formation anchors to absolute pitch coords.
+   * Home team: x = nx * pitchW. Away team: mirrored horizontally.
+   */
+  public static anchors(formationId: FormationId, side: 'home' | 'away', pitchW = 960, pitchH = 540): Anchor2D[] {
+    const slots: FormationSlot[] = FORMATIONS[formationId];
+    const flip = side === 'away';
+    return slots.map((s) => ({
+      x: (flip ? 1 - s.nx : s.nx) * pitchW,
+      y: s.ny * pitchH,
+      role: s.role,
+      slot: s.id,
+    }));
   }
 }
