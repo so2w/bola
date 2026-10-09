@@ -35,3 +35,30 @@ export const FORMATIONS: Record<FormationId, FormationSlot[]> = {
     { id: 'fw1', role: 'FW', nx: 0.62, ny: 0.5 },
   ],
 };
+
+export interface AnchorCoord {
+  x: number;
+  y: number;
+  role: Role;
+  slot: string;
+}
+
+/**
+ * Converts normalized formation slots to absolute pitch coords.
+ * Home team: x = nx * pitchW. Away team: mirrored horizontally.
+ * Shared by FormationSystem.anchors and TeamCoordinator.
+ */
+export function anchorCoords(
+  slots: FormationSlot[],
+  side: 'home' | 'away',
+  pitchW: number,
+  pitchH: number,
+): AnchorCoord[] {
+  const flip = side === 'away';
+  return slots.map((s) => ({
+    x: (flip ? 1 - s.nx : s.nx) * pitchW,
+    y: s.ny * pitchH,
+    role: s.role,
+    slot: s.id,
+  }));
+}

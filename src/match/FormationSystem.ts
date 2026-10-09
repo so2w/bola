@@ -1,4 +1,4 @@
-import { FORMATIONS, type FormationId, type FormationSlot, type Role } from '../data/formations';
+import { FORMATIONS, anchorCoords, type AnchorCoord, type FormationId } from '../data/formations';
 
 export type FormationType = '4-4-2' | '4-3-3' | '3-5-2';
 
@@ -8,12 +8,7 @@ export interface Position2D {
   role: 'GK' | 'DF' | 'MF' | 'FW';
 }
 
-export interface Anchor2D {
-  x: number;
-  y: number;
-  role: Role;
-  slot: string;
-}
+export type Anchor2D = AnchorCoord;
 
 export class FormationSystem {
   public static getPositions(formation: FormationType, side: 'home' | 'away', pitchW = 960, pitchH = 540): Position2D[] {
@@ -50,13 +45,6 @@ export class FormationSystem {
    * Home team: x = nx * pitchW. Away team: mirrored horizontally.
    */
   public static anchors(formationId: FormationId, side: 'home' | 'away', pitchW = 960, pitchH = 540): Anchor2D[] {
-    const slots: FormationSlot[] = FORMATIONS[formationId];
-    const flip = side === 'away';
-    return slots.map((s) => ({
-      x: (flip ? 1 - s.nx : s.nx) * pitchW,
-      y: s.ny * pitchH,
-      role: s.role,
-      slot: s.id,
-    }));
+    return anchorCoords(FORMATIONS[formationId], side, pitchW, pitchH);
   }
 }

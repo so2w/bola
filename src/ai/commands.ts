@@ -38,3 +38,14 @@ export interface BallSnapshot {
   vx: number;
   vy: number;
 }
+
+/** Blackboard context passed to FootballAI.tick by the TeamCoordinator. */
+export interface MatchContext {
+  ball: BallSnapshot;
+  possessorId: string | null;
+  myTeamPossession: boolean;
+  anchorX: number;
+  anchorY: number;
+  pressers: string[];
+  attackDir: 1 | -1;
+}

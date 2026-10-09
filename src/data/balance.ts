@@ -28,6 +28,7 @@ export const BALANCE_CONFIG = {
     CONTROL_RADIUS_PX: 22,
     PRESS_COUNT_MAX: 2,
     GK_HOLD_MS: 700,
+    SHOOT_RANGE_PX: 120,
   },
   SELECTION: {
     W1: 1.0,
