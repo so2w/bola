@@ -5,7 +5,9 @@ import { SimpleAI } from '../systems/SimpleAI';
 import { MatchManager } from '../systems/MatchManager';
 import { CameraController } from '../match/CameraController';
 import { PlayerSelectionSystem } from '../match/PlayerSelectionSystem';
+import { PossessionSystem } from '../match/PossessionSystem';
 import { HumanInputController } from '../input/HumanInputController';
+import type { EntitySnapshot, BallSnapshot } from '../ai/commands';
 
 /** Frame index inside the players sheet = position in manifest.spritesheets.players.frames. */
 const HOME_RUN_FRAME = 1;
@@ -23,6 +25,7 @@ export class MatchScene extends Phaser.Scene {
   private manager?: MatchManager;
   private cameraController?: CameraController;
   private selectionSystem?: PlayerSelectionSystem;
+  private possession?: PossessionSystem;
   private clockText!: Phaser.GameObjects.Text;
   private scoreText!: Phaser.GameObjects.Text;
   private leftGoal!: Phaser.GameObjects.Zone;
@@ -55,6 +58,7 @@ export class MatchScene extends Phaser.Scene {
     this.manager = new MatchManager();
     this.cameraController = new CameraController(this.cameras.main);
     this.selectionSystem = new PlayerSelectionSystem();
+    this.possession = new PossessionSystem();
 
     // Bind manager context for goal detection and reset
     this.manager.bind(this, this.ball, this.player, this.rival);
@@ -84,6 +88,7 @@ export class MatchScene extends Phaser.Scene {
 
     // Wire shot event from Player to Ball
     this.player.onShot((power, facing) => {
+      this.possession?.onKick();
       this.ball.applyKick(facing, power);
       if (power > 0.6) {
         const magnitude = Phaser.Math.Clamp(power * 0.02, 0.008, 0.02);
@@ -94,6 +99,7 @@ export class MatchScene extends Phaser.Scene {
     // Wire shot event from Rival to Ball
     if (this.rival) {
       this.rival.onShot((power, facing) => {
+        this.possession?.onKick();
         this.ball.applyKick(facing, power);
         if (power > 0.6) {
           const magnitude = Phaser.Math.Clamp(power * 0.02, 0.008, 0.02);
@@ -223,6 +229,40 @@ export class MatchScene extends Phaser.Scene {
       this.player['updateAnimation']?.();
     }
     this.ball.preUpdate(time, delta);
+
+    // Possession update (domain-only wiring; consumed by team AI in slice 3)
+    if (this.possession && this.ball) {
+      const snaps: EntitySnapshot[] = [
+        {
+          id: 'home-1',
+          team: 'home',
+          role: 'FW',
+          x: this.player.sprite.x,
+          y: this.player.sprite.y,
+          vx: this.player.body.velocity.x,
+          vy: this.player.body.velocity.y,
+        },
+      ];
+      if (this.rival) {
+        snaps.push({
+          id: 'away-1',
+          team: 'away',
+          role: 'FW',
+          x: this.rival.sprite.x,
+          y: this.rival.sprite.y,
+          vx: this.rival.body.velocity.x,
+          vy: this.rival.body.velocity.y,
+        });
+      }
+      const ballSnap: BallSnapshot = {
+        x: this.ball.sprite.x,
+        y: this.ball.sprite.y,
+        z: this.ball.z,
+        vx: this.ball.body.velocity.x,
+        vy: this.ball.body.velocity.y,
+      };
+      this.possession.update(delta, snaps, ballSnap);
+    }
 
     // HUD update
     if (this.manager && this.clockText && this.scoreText) {
