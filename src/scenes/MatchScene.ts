@@ -12,6 +12,7 @@ import { AudioDirector } from '../audio/AudioDirector';
 import { PowerMeterHud } from '../ui/PowerMeterHud';
 import { BALANCE_CONFIG } from '../data/balance';
 import { buildFrameMap } from '../entities/frameMap';
+import { GoalFeedback } from '../match/GoalFeedback';
 import { anchorCoords, resolveFormation, type FormationId } from '../data/formations';
 import { resolveMatchFormations, type MatchSceneInitData } from '../match/resolveFormations';
 import type { AICommand, BallSnapshot, EntitySnapshot } from '../ai/commands';
@@ -54,6 +55,8 @@ export class MatchScene extends Phaser.Scene {
   /** Player → (team, id) for last-touch attribution feeds (RULE-1). */
   private playerMeta = new Map<Player, { team: 'home' | 'away'; id: string }>();
   private lastTouchPossessorId: string | null = null;
+  /** Scoring side of the last GOAL — picks which net flash pulses. */
+  private lastScoringSide: 'home' | 'away' = 'home';
   /** PRES-2: match event audio with graceful missing-asset fallback. */
   private audio?: AudioDirector;
   /** PM-1: charge power meter, fixed bottom-center HUD slot. */
@@ -62,6 +65,10 @@ export class MatchScene extends Phaser.Scene {
   private prevMatchState?: string;
   /** PRES-2: PASS vs KICK hint set by handleAIKick, consumed by wireShots. */
   private pendingShotKind = new Map<Player, 'KICK' | 'PASS'>();
+  /** MF-1/MF-2: goal-mouth feedback guards (POST once per shot, cheer once per goal). */
+  private goalFeedback = new GoalFeedback();
+  /** MF-2: net flash overlays for each goal side, hidden at rest. */
+  private netFlash: { home: Phaser.GameObjects.Rectangle; away: Phaser.GameObjects.Rectangle } | null = null;
 
   constructor() {
     super('MatchScene');
@@ -174,14 +181,57 @@ export class MatchScene extends Phaser.Scene {
     this.leftGoal.setVisible(false);
     this.rightGoal.setVisible(false);
 
+    // MF-1: post bands sit just beyond the goal-mouth band (geometry from
+    // BALANCE_CONFIG.FEEDBACK), one above and one below each goal zone.
+    const FB = BALANCE_CONFIG.FEEDBACK;
+    const bandOffset = FB.GOAL_MOUTH_HALF_HEIGHT_PX + FB.POST_BAND_HEIGHT_PX / 2;
+    const postBands: Phaser.GameObjects.Zone[] = [];
+    for (const goal of [
+      { x: 20, side: 'left' as const },
+      { x: 940, side: 'right' as const },
+    ]) {
+      for (const dir of [-1, 1]) {
+        const band = this.add.zone(
+          goal.x,
+          FB.GOAL_MOUTH_CENTER_Y_PX + dir * bandOffset,
+          40,
+          FB.POST_BAND_HEIGHT_PX,
+        );
+        this.physics.world.enable(band);
+        (band.body as Phaser.Physics.Arcade.Body).setImmovable(true);
+        band.setVisible(false);
+        postBands.push(band);
+      }
+    }
+    for (const band of postBands) {
+      this.physics.add.overlap(this.ball.sprite, band, () => {
+        // MF-1-S2/S3 + MF-2-S2: POST fires once per shot, only while PLAYING.
+        if (this.manager && this.goalFeedback.onPostBandOverlap(this.manager.state)) {
+          this.audio?.playEvent('POST');
+        }
+      }, undefined, this);
+    }
+
+    // MF-2: cheap net flash — alpha-pulsed rectangle over each goal zone.
+    this.netFlash = {
+      // Net that flashes belongs to the conceding goal's side: a home GOAL is
+      // scored in the right goal, an away GOAL in the left goal.
+      home: this.add.rectangle(940, FB.GOAL_MOUTH_CENTER_Y_PX, 40, 140, 0xffffff, 0),
+      away: this.add.rectangle(20, FB.GOAL_MOUTH_CENTER_Y_PX, 40, 140, 0xffffff, 0),
+    };
+    this.netFlash.home.setDepth(9).setVisible(false);
+    this.netFlash.away.setDepth(9).setVisible(false);
+
     this.physics.add.overlap(this.ball.sprite, this.leftGoal, () => {
       if (this.manager?.state === 'PLAYING') {
+        this.lastScoringSide = 'away';
         this.manager.handleGoal('away');
       }
     }, undefined, this);
 
     this.physics.add.overlap(this.ball.sprite, this.rightGoal, () => {
       if (this.manager?.state === 'PLAYING') {
+        this.lastScoringSide = 'home';
         this.manager.handleGoal('home');
       }
     }, undefined, this);
@@ -292,8 +342,15 @@ export class MatchScene extends Phaser.Scene {
       if (this.prevMatchState === 'KICKOFF' && this.manager.state === 'PLAYING') {
         this.audio?.playEvent('WHISTLE');
       }
-      if (this.prevMatchState === 'PLAYING' && this.manager.state === 'GOAL') {
-        this.audio?.playEvent('GOAL');
+      // MF-1/MF-2 guarded events: CROWD_CHEER + net flash fire exactly once on
+      // the PLAYING -> GOAL edge; post guard re-arms on every PLAYING resume.
+      for (const event of this.goalFeedback.onStateTransition(this.prevMatchState, this.manager.state)) {
+        if (event === 'CROWD_CHEER') {
+          this.audio?.playEvent('GOAL');
+          this.audio?.playEvent('CROWD_CHEER');
+        } else {
+          this.pulseNet(this.lastScoringSide);
+        }
       }
       this.prevMatchState = this.manager.state;
     }
@@ -517,17 +574,39 @@ export class MatchScene extends Phaser.Scene {
     p.shootWithPower(cmd.power ?? 0.3, facing);
   }
 
+  /** MF-2: config-timed net flash pulse (alpha 0.6 -> 0, two cycles). */
+  private pulseNet(side: 'home' | 'away'): void {
+    const rect = this.netFlash?.[side];
+    if (!rect) {
+      return;
+    }
+    rect.setVisible(true);
+    this.tweens.add({
+      targets: rect,
+      alpha: { from: 0.6, to: 0 },
+      duration: BALANCE_CONFIG.FEEDBACK.NET_FLASH_MS / 2,
+      yoyo: true,
+      repeat: 1,
+      onComplete: () => {
+        rect.setVisible(false);
+        rect.setAlpha(0);
+      },
+    });
+  }
+
   private wireShots(p: Player): void {
-    p.onShot((power, facing) => {
+    p.onShot((power, facing, cbKind) => {
       // RULE-1: the kicker touched the ball before it flew.
       const meta = this.playerMeta.get(p);
       if (meta) {
         this.manager?.touchTracker.recordTouch(meta.team, meta.id, p.sprite.x, p.sprite.y);
       }
       this.possession?.onKick();
+      // MF-1: a new kick re-arms the once-per-shot POST guard.
+      this.goalFeedback.onKick();
       this.ball.applyKick(facing, power);
-      // PRES-2: kick/pass audio (consumed hint; human shots default KICK).
-      const kind = this.pendingShotKind.get(p) ?? 'KICK';
+      // PRES-2 + MC-1: PASS vs KICK hint (AI map or human contextual pass).
+      const kind = this.pendingShotKind.get(p) ?? cbKind ?? 'KICK';
       this.pendingShotKind.delete(p);
       this.audio?.playEvent(kind);
       if (power > 0.6) {

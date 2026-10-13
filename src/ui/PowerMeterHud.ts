@@ -45,13 +45,11 @@ export class PowerMeterHud {
     const width = meterFillWidth(power, this.cfg.WIDTH_PX);
     this.fill.width = width;
     // Green -> red lerp across the configured stops.
+    const low = Phaser.Display.Color.IntegerToColor(this.cfg.COLOR_LOW);
+    const high = Phaser.Display.Color.IntegerToColor(this.cfg.COLOR_HIGH);
     const color = Phaser.Display.Color.Interpolate.ColorWithColor(
-      { r: (this.cfg.COLOR_LOW >> 16) & 0xff, g: (this.cfg.COLOR_LOW >> 8) & 0xff, b: this.cfg.COLOR_LOW & 0xff },
-      {
-        r: (this.cfg.COLOR_HIGH >> 16) & 0xff,
-        g: (this.cfg.COLOR_HIGH >> 8) & 0xff,
-        b: this.cfg.COLOR_HIGH & 0xff,
-      },
+      low,
+      high,
       100,
       Math.round(meterFillWidth(power, 100)),
     );
