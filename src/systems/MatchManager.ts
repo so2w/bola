@@ -33,6 +33,15 @@ export interface MatchFormations {
   away: FormationId;
 }
 
+/** CONF-1: match clock constants injected, defaulting to BALANCE_CONFIG.MATCH. */
+export interface MatchClockConfig {
+  TIME_REMAINING_GAME_SECONDS: number;
+  GAME_TIME_SCALE: number;
+  KICKOFF_PAUSE_MS: number;
+  GOAL_PAUSE_MS: number;
+  OUT_OF_BOUNDS_PAUSE_MS: number;
+}
+
 interface PendingRestart {
   kind: 'THROW_IN' | 'CORNER' | 'GOAL_KICK';
   team: TeamSide;
@@ -50,15 +59,16 @@ interface PendingRestart {
  */
 export class MatchManager {
   public state: MatchState = 'KICKOFF';
-  public timeRemaining = 540; // game seconds: 3 real minutes * 3
+  public timeRemaining: number; // game seconds (CONF-1: clock from config)
   public score = { home: 0, away: 0 };
-  public kickoffTimer = 1500;
+  public kickoffTimer: number;
   public resetTimer = 0;
   /** RULE-1: last-touch attribution, fed by kicks/possession captures. */
   public readonly touchTracker = new TouchTracker();
   /** Debug/telemetry: last restart award (kind + team) consumed at placement. */
   public lastRestartAward: { kind: string; team: TeamSide } | null = null;
 
+  private readonly clock: MatchClockConfig;
   private scene?: Phaser.Scene;
   private ball?: Ball;
   private homeTeam: Player[] = [];
@@ -68,7 +78,11 @@ export class MatchManager {
   private goalLatch = false;
   private pendingRestart: PendingRestart | null = null;
 
-  constructor() {}
+  constructor(clock: MatchClockConfig = BALANCE_CONFIG.MATCH) {
+    this.clock = { ...clock };
+    this.timeRemaining = this.clock.TIME_REMAINING_GAME_SECONDS;
+    this.kickoffTimer = this.clock.KICKOFF_PAUSE_MS;
+  }
 
   public bind(
     scene: Phaser.Scene,
@@ -90,14 +104,14 @@ export class MatchManager {
       this.kickoffTimer -= delta;
       if (this.kickTimerExpired()) {
         this.state = 'PLAYING';
-        this.kickoffTimer = 1500;
+        this.kickoffTimer = this.clock.KICKOFF_PAUSE_MS;
       }
       return;
     }
 
-    // PLAYING: clock 3x scale, check events
+    // PLAYING: clock at configured game-time scale (CONF-1), check events
     if (this.state === 'PLAYING') {
-      const gameDeltaSec = (delta / 1000) * 3;
+      const gameDeltaSec = (delta / 1000) * this.clock.GAME_TIME_SCALE;
       this.timeRemaining = Math.max(0, this.timeRemaining - gameDeltaSec);
       if (this.timeRemaining <= 0) {
         this.state = 'GAME_OVER';
@@ -162,7 +176,7 @@ export class MatchManager {
 
     this.freezeEntities();
     this.state = 'GOAL';
-    this.resetTimer = 2000;
+    this.resetTimer = this.clock.GOAL_PAUSE_MS;
 
     // VFX: ¡GOL!
     if (this.scene) {
@@ -195,7 +209,7 @@ export class MatchManager {
       // Should be unreachable (guard above), but never soft-lock.
       this.freezeEntities();
       this.state = 'OUT_OF_BOUNDS';
-      this.resetTimer = 2000;
+      this.resetTimer = this.clock.OUT_OF_BOUNDS_PAUSE_MS;
       return;
     }
 
@@ -217,7 +231,7 @@ export class MatchManager {
     this.lastRestartAward = { kind: restart.kind, team: restart.team };
     this.freezeEntities();
     this.state = restart.kind;
-    this.resetTimer = 2000;
+    this.resetTimer = this.clock.OUT_OF_BOUNDS_PAUSE_MS;
   }
 
   /** RULE-2: per-state placement (THROW_IN/CORNER/GOAL_KICK), then resume play. */
@@ -310,7 +324,7 @@ export class MatchManager {
   private resetMatch(): void {
     this.resetPositions();
     this.state = 'KICKOFF';
-    this.kickoffTimer = 1500;
+    this.kickoffTimer = this.clock.KICKOFF_PAUSE_MS;
     this.goalLatch = false;
     this.touchTracker.reset();
     this.pendingRestart = null;
@@ -322,10 +336,10 @@ export class MatchManager {
       return;
     }
     this.score = { home: 0, away: 0 };
-    this.timeRemaining = 540;
+    this.timeRemaining = this.clock.TIME_REMAINING_GAME_SECONDS;
     this.resetTimer = 0;
     this.state = 'KICKOFF';
-    this.kickoffTimer = 1500;
+    this.kickoffTimer = this.clock.KICKOFF_PAUSE_MS;
     this.goalLatch = false;
     this.touchTracker.reset();
     this.pendingRestart = null;

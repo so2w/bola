@@ -45,6 +45,17 @@ export const BALANCE_CONFIG = {
     DIVE_DURATION_MS: 400,
     GK_HOLD_MS: 700,
   },
+  // Camera follow (PRES-1): weighting between controlled player and ball,
+  // velocity look-ahead, per-frame lerp, fixed 11v11 zoom and edge clamp
+  // allowance (margin of visible dead space beyond the pitch, in px).
+  CAMERA: {
+    LERP: 0.08,
+    LOOK_AHEAD: 0.15,
+    ZOOM_11V11: 1.15,
+    PLAYER_WEIGHT: 0.4,
+    BALL_WEIGHT: 0.6,
+    CLAMP_MARGIN: 0,
+  },
   // Contextual restarts (RULE-1/RULE-2): throw-in support bubble, corner
   // geometry, 6yd goal-kick spot, and the corner-exit tolerance.
   RESTART: {

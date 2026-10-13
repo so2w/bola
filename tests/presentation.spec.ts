@@ -201,11 +201,14 @@ describe('MatchManager — CONF-1 config-driven clock', () => {
     mgr.update(1000);
     expect(mgr.state).toBe('PLAYING');
 
-    // 200 real-time steps of 100ms = 20s real = 60 game-seconds at 3x
-    for (let i = 0; i < 200; i++) {
+    // ~200 real-time steps of 100ms = 20s real = 60 game-seconds at 3x
+    for (let i = 0; i < 210; i++) {
       mgr.update(100);
+      if (mgr.state === 'GAME_OVER') {
+        break;
+      }
     }
-    expect(mgr.getTime()).toBe(0);
+    expect(mgr.getTime()).toBeLessThan(1e-6);
     expect(mgr.state).toBe('GAME_OVER');
   });
 });

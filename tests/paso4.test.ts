@@ -112,6 +112,7 @@ vi.mock('../src/entities/Ball', () => ({
 
 vi.mock('../src/match/CameraController', () => ({
   CameraController: class {
+    update = vi.fn();
     constructor(_cam?: unknown) {}
   },
 }));

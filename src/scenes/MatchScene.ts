@@ -8,6 +8,8 @@ import { PossessionSystem } from '../match/PossessionSystem';
 import { HumanInputController } from '../input/HumanInputController';
 import { AIController } from '../input/AIController';
 import { TeamCoordinator } from '../ai/TeamCoordinator';
+import { AudioDirector } from '../audio/AudioDirector';
+import { BALANCE_CONFIG } from '../data/balance';
 import { anchorCoords, resolveFormation, type FormationId } from '../data/formations';
 import { resolveMatchFormations, type MatchSceneInitData } from '../match/resolveFormations';
 import type { AICommand, BallSnapshot, EntitySnapshot } from '../ai/commands';
@@ -50,6 +52,12 @@ export class MatchScene extends Phaser.Scene {
   /** Player → (team, id) for last-touch attribution feeds (RULE-1). */
   private playerMeta = new Map<Player, { team: 'home' | 'away'; id: string }>();
   private lastTouchPossessorId: string | null = null;
+  /** PRES-2: match event audio with graceful missing-asset fallback. */
+  private audio?: AudioDirector;
+  /** Previous MatchManager state — drives WHISTLE/GOAL transition events. */
+  private prevMatchState?: string;
+  /** PRES-2: PASS vs KICK hint set by handleAIKick, consumed by wireShots. */
+  private pendingShotKind = new Map<Player, 'KICK' | 'PASS'>();
 
   constructor() {
     super('MatchScene');
@@ -116,7 +124,21 @@ export class MatchScene extends Phaser.Scene {
     // Systems
     this.manager = new MatchManager();
     this.manager.bind(this, this.ball, this.homeTeam, this.awayTeam, this.formations);
-    this.cameraController = new CameraController(this.cameras.main);
+    // PRES-1: config-driven camera (zoom fixed at create, clamp to pitch bounds).
+    const camCfg = BALANCE_CONFIG.CAMERA;
+    this.cameraController = new CameraController(this.cameras.main, camCfg.LERP, camCfg.LOOK_AHEAD, {
+      zoom: camCfg.ZOOM_11V11,
+      playerWeight: camCfg.PLAYER_WEIGHT,
+      ballWeight: camCfg.BALL_WEIGHT,
+      clampMargin: camCfg.CLAMP_MARGIN,
+      worldWidth: BALANCE_CONFIG.PHYSICS.PITCH_WIDTH,
+      worldHeight: BALANCE_CONFIG.PHYSICS.PITCH_HEIGHT,
+    });
+    // PRES-2: event-driven audio; assets are optional (skip + debug warn).
+    this.audio = new AudioDirector({
+      has: (key) => this.cache.audio.exists(key),
+      play: (key, cfg) => this.sound.play(key, cfg),
+    }, { debug: true });
     this.selectionSystem = new PlayerSelectionSystem();
     this.possession = new PossessionSystem();
     this.coordinatorHome = new TeamCoordinator('home', resolveFormation(this.formations.home));
@@ -245,6 +267,14 @@ export class MatchScene extends Phaser.Scene {
     // Manager update first
     if (this.manager) {
       this.manager.update(delta);
+      // PRES-2: state-transition audio (whistle at kick-in, goal sting on goal)
+      if (this.prevMatchState === 'KICKOFF' && this.manager.state === 'PLAYING') {
+        this.audio?.playEvent('WHISTLE');
+      }
+      if (this.prevMatchState === 'PLAYING' && this.manager.state === 'GOAL') {
+        this.audio?.playEvent('GOAL');
+      }
+      this.prevMatchState = this.manager.state;
     }
 
     const isPlaying = this.manager?.state === 'PLAYING';
@@ -354,6 +384,16 @@ export class MatchScene extends Phaser.Scene {
     }
     this.ball.preUpdate(time, delta);
 
+    // PRES-1: per-frame camera follow (selected player + ball, config lerp,
+    // look-ahead and pitch-edge clamp) — after entity preUpdate, before HUD.
+    if (this.cameraController && controlled && this.ball) {
+      this.cameraController.update(
+        { x: controlled.sprite.x, y: controlled.sprite.y },
+        { x: this.ball.sprite.x, y: this.ball.sprite.y },
+        { x: this.ball.body.velocity.x, y: this.ball.body.velocity.y },
+      );
+    }
+
     // HUD update
     if (this.manager && this.clockText && this.scoreText) {
       const seconds = Math.max(0, Math.ceil(this.manager.getTime()));
@@ -446,6 +486,8 @@ export class MatchScene extends Phaser.Scene {
     if (facing.lengthSq() > 0) {
       facing.normalize();
     }
+    // PRES-2: tag the shot kind so the shot sound is PASS vs KICK by command.
+    this.pendingShotKind.set(p, cmd.action === 'PASS' ? 'PASS' : 'KICK');
     p.shootWithPower(cmd.power ?? 0.3, facing);
   }
 
@@ -458,6 +500,10 @@ export class MatchScene extends Phaser.Scene {
       }
       this.possession?.onKick();
       this.ball.applyKick(facing, power);
+      // PRES-2: kick/pass audio (consumed hint; human shots default KICK).
+      const kind = this.pendingShotKind.get(p) ?? 'KICK';
+      this.pendingShotKind.delete(p);
+      this.audio?.playEvent(kind);
       if (power > 0.6) {
         const magnitude = Phaser.Math.Clamp(power * 0.02, 0.008, 0.02);
         this.cameras.main.shake(100, magnitude);

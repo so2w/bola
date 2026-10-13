@@ -139,10 +139,13 @@ function simulateMatch(seed: number): MatchResult {
 
     mgr.update(DT);
 
-    // STAB-1: no state may be stuck beyond the frame budget (GAME_OVER is terminal).
+    // STAB-1: no non-PLAYING state may be stuck beyond the frame budget.
+    // (PLAYING legitimately spans the whole match clock.)
     if (mgr.state === prevState) {
       framesInState++;
-      maxFramesInState = Math.max(maxFramesInState, framesInState);
+      if (mgr.state !== 'PLAYING') {
+        maxFramesInState = Math.max(maxFramesInState, framesInState);
+      }
     } else {
       framesInState = 0;
       trace.push(`${prevState}->${mgr.state}`);
