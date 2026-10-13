@@ -258,7 +258,12 @@ describe('MatchScene Game Over visibility', () => {
 
     scene.manager = manager;
     scene.gameOverGroup = gameOverGroup;
-    scene.resultOverlayGroup = { visible: false };
+    scene.resultOverlayGroup = {
+      visible: false,
+      setVisible: vi.fn(function (v: boolean) {
+        this.visible = v;
+      }),
+    };
     scene.player = {
       body: { setVelocity: vi.fn(), setAcceleration: vi.fn() },
       preUpdate: vi.fn(),
@@ -342,12 +347,13 @@ describe('MatchScene Restart button click (GO-SCREEN-2)', () => {
 });
 
 describe('MatchScene Cancel button (RESULT-1 / REQ-UI-2)', () => {
-  it('Cancel toggles the result overlay open and closed', () => {
-    const { texts, containers } = buildScene();
+  it('Cancel toggles the result overlay open and closed while PLAYING', () => {
+    const { scene, texts, containers } = buildScene();
     const overlay = containers[1];
     const cancelBtn = texts[2];
     const handler = pointerHandler(cancelBtn);
 
+    (scene.manager as MatchManager).state = 'PLAYING';
     expect(overlay.visible).toBe(false); // starts hidden
 
     handler();
@@ -355,6 +361,46 @@ describe('MatchScene Cancel button (RESULT-1 / REQ-UI-2)', () => {
 
     handler();
     expect(overlay.visible).toBe(false);
+  });
+});
+
+describe('MatchScene Cancel state guard (verify WARNING-1 resolution)', () => {
+  it('Cancel is ignored unless the match is PLAYING', () => {
+    const { scene, texts, containers } = buildScene();
+    const mgr: MatchManager = scene.manager;
+    const overlay = containers[1];
+    const handler = pointerHandler(texts[2]);
+
+    mgr.state = 'KICKOFF';
+    handler();
+    expect(overlay.visible).toBe(false);
+
+    mgr.state = 'GAME_OVER';
+    handler();
+    expect(overlay.visible).toBe(false); // game-over panel already shows the score
+
+    mgr.state = 'PLAYING';
+    handler();
+    expect(overlay.visible).toBe(true);
+    handler();
+    expect(overlay.visible).toBe(false);
+  });
+});
+
+describe('MatchScene result overlay auto-hide at GAME_OVER', () => {
+  it('hides a stale result overlay once the match reaches GAME_OVER', () => {
+    const { scene, containers } = buildScene();
+    const mgr: MatchManager = scene.manager;
+    const overlay = containers[1];
+
+    mgr.state = 'PLAYING';
+    overlay.visible = true;
+    scene.update(0, 16);
+    expect(overlay.visible).toBe(true);
+
+    mgr.state = 'GAME_OVER';
+    scene.update(0, 16);
+    expect(overlay.visible).toBe(false); // never stacked under the game-over panel
   });
 });
 

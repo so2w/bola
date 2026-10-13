@@ -147,7 +147,9 @@ export class MatchScene extends Phaser.Scene {
       padding: { left: 8, right: 8, top: 4, bottom: 4 },
     }).setOrigin(1, 0).setDepth(10).setInteractive();
     this.cancelButton.on('pointerdown', () => {
-      if (this.resultOverlayGroup) {
+      // Result peek is a PLAYING-state affordance; at GAME_OVER the game-over
+      // panel already shows the final score (verify WARNING-1 resolution).
+      if (this.resultOverlayGroup && this.manager?.state === 'PLAYING') {
         this.resultOverlayGroup.setVisible(!this.resultOverlayGroup.visible);
       }
     });
@@ -345,11 +347,16 @@ export class MatchScene extends Phaser.Scene {
       }
     }
 
-    // Result overlay score sync
+    // Result overlay score sync; auto-hide once the match ends so the
+    // game-over panel (depth 30) is never stacked under a stale peek (depth 25)
     if (this.resultOverlayGroup && this.manager) {
-      const roScoreText = (this.resultOverlayGroup as any).scoreText as Phaser.GameObjects.Text;
-      if (roScoreText && this.resultOverlayGroup.visible) {
-        roScoreText.setText(`${this.manager.score.home} - ${this.manager.score.away}`);
+      if (this.manager.state === 'GAME_OVER') {
+        this.resultOverlayGroup.setVisible(false);
+      } else {
+        const roScoreText = (this.resultOverlayGroup as any).scoreText as Phaser.GameObjects.Text;
+        if (roScoreText && this.resultOverlayGroup.visible) {
+          roScoreText.setText(`${this.manager.score.home} - ${this.manager.score.away}`);
+        }
       }
     }
   }
