@@ -10,6 +10,7 @@ import { AIController } from '../input/AIController';
 import { TeamCoordinator } from '../ai/TeamCoordinator';
 import { AudioDirector } from '../audio/AudioDirector';
 import { BALANCE_CONFIG } from '../data/balance';
+import { buildFrameMap } from '../entities/frameMap';
 import { anchorCoords, resolveFormation, type FormationId } from '../data/formations';
 import { resolveMatchFormations, type MatchSceneInitData } from '../match/resolveFormations';
 import type { AICommand, BallSnapshot, EntitySnapshot } from '../ai/commands';
@@ -90,12 +91,16 @@ export class MatchScene extends Phaser.Scene {
       away: awayCoords.map((a) => a.role),
     };
 
-    this.homeTeam = homeCoords.map((a) => new Player(this, a.x, a.y));
-    this.awayTeam = awayCoords.map((a) => {
-      const p = new Player(this, a.x, a.y);
-      p.sprite.setTint(0x0000ff);
-      return p;
-    });
+    // PA-1: manifest-driven frame registry (name -> sheet index) injected per team.
+    const frameMap = buildFrameMap(
+      this.cache.json.get('manifest') as {
+        spritesheets: { players: { frames: string[] } };
+      },
+    );
+
+    this.homeTeam = homeCoords.map((a) => new Player(this, a.x, a.y, { team: 'home', frames: frameMap }));
+    // Away tint is applied INSIDE Player only as a fallback for missing away frames (PA-1-S2/S3).
+    this.awayTeam = awayCoords.map((a) => new Player(this, a.x, a.y, { team: 'away', frames: frameMap }));
 
     this.homeByIndex = new Map(this.homeTeam.map((p, i) => [`home-${i}`, p]));
     this.awayByIndex = new Map(this.awayTeam.map((p, i) => [`away-${i}`, p]));
@@ -379,7 +384,7 @@ export class MatchScene extends Phaser.Scene {
       if (canPlay) {
         controlled.preUpdate(time, delta);
       } else {
-        controlled.updateAnimation();
+        controlled.updateAnimation(delta);
       }
     }
     this.ball.preUpdate(time, delta);

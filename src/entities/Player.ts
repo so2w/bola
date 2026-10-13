@@ -1,6 +1,9 @@
 import Phaser from 'phaser';
+import { BALANCE_CONFIG } from '../data/balance';
+import { resolveClipFrames, type ClubTeam } from './frameMap';
 
 type AnimState = 'Idle' | 'Run' | 'Kick';
+type ShotKind = 'KICK' | 'PASS';
 
 /**
  * Controller contract: one controller per Player instance.
@@ -12,6 +15,15 @@ export interface IPlayerController {
   update(dtMs: number): void;
 }
 
+export interface PlayerOptions {
+  /** Dressing side; drives manifest frame selection. Defaults to 'home'. */
+  team?: ClubTeam;
+  /** Manifest frame registry (name -> sheet index) built by the scene. */
+  frames?: ReadonlyMap<string, number>;
+}
+
+const AWAY_TINT_FALLBACK = 0x0000ff;
+
 export class Player {
   public scene: Phaser.Scene;
   public body: Phaser.Physics.Arcade.Body;
@@ -19,21 +31,31 @@ export class Player {
   public animState: AnimState = 'Idle';
   public chargeTimer = 0;
   public maxSpeed = 220;
-  private maxCharge = 1000;
-  private kickDuration = 200;
+  public readonly team: ClubTeam;
+  private readonly frames?: ReadonlyMap<string, number>;
+  private readonly animKeys: { idle: string; run: string; kick: string };
+  private maxCharge = BALANCE_CONFIG.PHYSICS.PLAYER_MAX_CHARGE_MS;
+  private kickDuration = BALANCE_CONFIG.PHYSICS.PLAYER_KICK_DURATION_MS;
   private kickTimer = 0;
   private isCharging = false;
   private controller?: IPlayerController;
-  private shotCallback?: (power: number, facing: Phaser.Math.Vector2) => void;
+  private shotCallback?: (power: number, facing: Phaser.Math.Vector2, kind?: ShotKind) => void;
 
-  constructor(scene: Phaser.Scene, x: number, y: number) {
+  constructor(scene: Phaser.Scene, x: number, y: number, options: PlayerOptions = {}) {
     this.scene = scene;
+    this.team = options.team ?? 'home';
+    this.frames = options.frames;
+    this.animKeys = {
+      idle: `player_idle_${this.team}`,
+      run: `player_run_${this.team}`,
+      kick: `player_kick_${this.team}`,
+    };
     this.sprite = scene.add.sprite(x, y, 'players', 0);
     const physics = scene.physics;
     physics.add.existing(this.sprite);
     this.body = this.sprite.body as Phaser.Physics.Arcade.Body;
     this.body.setCollideWorldBounds(true);
-    this.body.setDrag(0.8);
+    this.body.setDrag(BALANCE_CONFIG.PHYSICS.PLAYER_DRAG);
 
     this.createAnimations();
   }
@@ -53,31 +75,29 @@ export class Player {
     this.controller?.update(dtMs);
   }
 
+  /**
+   * PA-1: animations resolve frame indices through the manifest registry;
+   * away clip missing -> home frames + team tint fallback (PA-1-S3).
+   */
   private createAnimations(): void {
-    if (!this.scene.anims.exists('player_idle')) {
-      this.scene.anims.create({
-        key: 'player_idle',
-        frames: [{ key: 'players', frame: 0 }],
-        frameRate: 1,
-      });
+    const resolved = resolveClipFrames(this.frames ?? new Map(), this.team);
+    const defs: Array<[string, number[], number, number | undefined]> = [
+      [this.animKeys.idle, resolved.idle, 1, undefined],
+      [this.animKeys.run, resolved.run, 8, -1],
+      [this.animKeys.kick, resolved.kick, 1, undefined],
+    ];
+    for (const [key, frames, frameRate, repeat] of defs) {
+      if (!this.scene.anims.exists(key)) {
+        this.scene.anims.create({
+          key,
+          frames: frames.map((frame) => ({ key: 'players', frame })),
+          frameRate,
+          ...(repeat !== undefined ? { repeat } : {}),
+        });
+      }
     }
-    if (!this.scene.anims.exists('player_run')) {
-      this.scene.anims.create({
-        key: 'player_run',
-        frames: [
-          { key: 'players', frame: 1 },
-          { key: 'players', frame: 2 },
-        ],
-        frameRate: 8,
-        repeat: -1,
-      });
-    }
-    if (!this.scene.anims.exists('player_kick')) {
-      this.scene.anims.create({
-        key: 'player_kick',
-        frames: [{ key: 'players', frame: 3 }],
-        frameRate: 1,
-      });
+    if (resolved.needsTint) {
+      this.sprite.setTint(AWAY_TINT_FALLBACK);
     }
   }
 
@@ -85,7 +105,7 @@ export class Player {
   public preUpdate(time: number, delta: number): void {
     void time;
     this.updateCharge(delta);
-    this.updateAnimation();
+    this.updateAnimation(delta);
   }
 
   /**
@@ -108,6 +128,17 @@ export class Player {
     this.chargeTimer = 0;
   }
 
+  /** Cancels an in-flight charge without firing (MC-2: shot gated by ball proximity). */
+  public cancelCharge(): void {
+    this.isCharging = false;
+    this.chargeTimer = 0;
+  }
+
+  /** Public charging flag for the power meter HUD (PM-1). */
+  public isChargingNow(): boolean {
+    return this.isCharging;
+  }
+
   /**
    * Releases the charge (controller calls on shot-key up): computes power and
    * facing, starts the kick animation and fires the shot callback.
@@ -121,7 +152,22 @@ export class Player {
     this.startKick();
     this.chargeTimer = 0;
     this.isCharging = false;
-    this.shotCallback?.(power, facing);
+    this.shotCallback?.(power, facing, 'KICK');
+  }
+
+  /**
+   * MC-1: contextual pass — kicks toward a teammate at pass power.
+   */
+  public passTo(target: { x: number; y: number }): void {
+    const dx = target.x - this.sprite.x;
+    const dy = target.y - this.sprite.y;
+    const facing = new Phaser.Math.Vector2(dx, dy);
+    if (facing.lengthSq() > 0) {
+      facing.normalize();
+    } else {
+      facing.setTo(1, 0);
+    }
+    this.shootWithPower(BALANCE_CONFIG.INPUT.PASS_POWER_PCT, facing, 'PASS');
   }
 
   private updateCharge(delta: number): void {
@@ -130,17 +176,18 @@ export class Player {
     }
   }
 
-  public updateAnimation(): void {
+  public updateAnimation(delta: number): void {
+    // PA-2: kick window counts down on the preUpdate delta — never scene loop.
     if (this.kickTimer > 0) {
-      this.kickTimer -= this.scene.game.loop.delta;
+      this.kickTimer -= delta;
       if (this.kickTimer <= 0) {
         this.animState = this.body.velocity.length() > 0 ? 'Run' : 'Idle';
       }
     }
 
     if (this.animState === 'Kick') {
-      if (!this.sprite.anims.isPlaying || this.sprite.anims.currentAnim?.key !== 'player_kick') {
-        this.sprite.anims.play('player_kick', true);
+      if (!this.sprite.anims.isPlaying || this.sprite.anims.currentAnim?.key !== this.animKeys.kick) {
+        this.sprite.anims.play(this.animKeys.kick, true);
       }
       return;
     }
@@ -148,13 +195,13 @@ export class Player {
     const moving = this.body.velocity.lengthSq() > 0;
     if (moving) {
       this.animState = 'Run';
-      if (!this.sprite.anims.isPlaying || this.sprite.anims.currentAnim?.key !== 'player_run') {
-        this.sprite.anims.play('player_run', true);
+      if (!this.sprite.anims.isPlaying || this.sprite.anims.currentAnim?.key !== this.animKeys.run) {
+        this.sprite.anims.play(this.animKeys.run, true);
       }
     } else {
       this.animState = 'Idle';
-      if (!this.sprite.anims.isPlaying || this.sprite.anims.currentAnim?.key !== 'player_idle') {
-        this.sprite.anims.play('player_idle', true);
+      if (!this.sprite.anims.isPlaying || this.sprite.anims.currentAnim?.key !== this.animKeys.idle) {
+        this.sprite.anims.play(this.animKeys.idle, true);
       }
     }
   }
@@ -162,7 +209,7 @@ export class Player {
   private startKick(): void {
     this.animState = 'Kick';
     this.kickTimer = this.kickDuration;
-    this.sprite.anims.play('player_kick', true);
+    this.sprite.anims.play(this.animKeys.kick, true);
   }
 
   private getFacing(): Phaser.Math.Vector2 {
@@ -174,7 +221,7 @@ export class Player {
     return new Phaser.Math.Vector2(1, 0);
   }
 
-  public onShot(cb: (power: number, facing: Phaser.Math.Vector2) => void): void {
+  public onShot(cb: (power: number, facing: Phaser.Math.Vector2, kind?: ShotKind) => void): void {
     this.shotCallback = cb;
   }
 
@@ -186,11 +233,11 @@ export class Player {
     this.sprite.setPosition(x, y);
   }
 
-  public shootWithPower(power: number, facing: Phaser.Math.Vector2): void {
+  public shootWithPower(power: number, facing: Phaser.Math.Vector2, kind: ShotKind = 'KICK'): void {
     if (this.kickTimer > 0) {
       return;
     }
     this.startKick();
-    this.shotCallback?.(Phaser.Math.Clamp(power, 0, 1), facing.clone());
+    this.shotCallback?.(Phaser.Math.Clamp(power, 0, 1), facing.clone(), kind);
   }
 }

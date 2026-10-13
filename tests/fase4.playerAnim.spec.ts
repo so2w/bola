@@ -117,7 +117,8 @@ describe('PA-2 kick window driven by preUpdate delta (2.2)', () => {
     expect(player.animState).toBe('Kick');
 
     const step = 16;
-    const steps = Math.floor(BALANCE_CONFIG.PHYSICS.PLAYER_KICK_DURATION_MS / step);
+    // Frames needed for accumulated delta to REACH the configured window.
+    const steps = Math.floor(BALANCE_CONFIG.PHYSICS.PLAYER_KICK_DURATION_MS / step) + 1;
     for (let i = 0; i < steps - 1; i++) {
       player.preUpdate(i * step, step);
       expect(player.animState).toBe('Kick');
