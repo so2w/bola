@@ -56,6 +56,32 @@ export const BALANCE_CONFIG = {
     BALL_WEIGHT: 0.6,
     CLAMP_MARGIN: 0,
   },
+  // Fase 4 GOLPE LEGIBLE (1.2): human input buffer + contextual pass gating.
+  INPUT: {
+    BUFFER_MS: 150,
+    PASS_PICKUP_RADIUS_PX: 28,
+    PASS_CONE_DEG: 45,
+    PASS_MAX_RANGE_PX: 260,
+    EMPTY_CONE_FALLBACK: 'none' as const,
+    PASS_POWER_PCT: 0.4,
+  },
+  // Fase 4 GOLPE LEGIBLE (3.2): charge power meter HUD geometry/colors.
+  POWER_METER: {
+    WIDTH_PX: 120,
+    HEIGHT_PX: 10,
+    Y_OFFSET_PX: -40,
+    COLOR_LOW: 0x4caf50,
+    COLOR_HIGH: 0xf44336,
+  },
+  // Fase 4 GOLPE LEGIBLE (5.x): post band geometry, net flash timing,
+  // goal-mouth band reference and the boundary rule for classification.
+  FEEDBACK: {
+    NET_FLASH_MS: 600,
+    POST_BAND_HEIGHT_PX: 24,
+    POST_BOUNDARY_INCLUSIVE: true,
+    GOAL_MOUTH_CENTER_Y_PX: 270,
+    GOAL_MOUTH_HALF_HEIGHT_PX: 70,
+  },
   // Contextual restarts (RULE-1/RULE-2): throw-in support bubble, corner
   // geometry, 6yd goal-kick spot, and the corner-exit tolerance.
   RESTART: {
