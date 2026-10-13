@@ -9,6 +9,7 @@ import { HumanInputController } from '../input/HumanInputController';
 import { AIController } from '../input/AIController';
 import { TeamCoordinator } from '../ai/TeamCoordinator';
 import { AudioDirector } from '../audio/AudioDirector';
+import { PowerMeterHud } from '../ui/PowerMeterHud';
 import { BALANCE_CONFIG } from '../data/balance';
 import { buildFrameMap } from '../entities/frameMap';
 import { anchorCoords, resolveFormation, type FormationId } from '../data/formations';
@@ -55,6 +56,8 @@ export class MatchScene extends Phaser.Scene {
   private lastTouchPossessorId: string | null = null;
   /** PRES-2: match event audio with graceful missing-asset fallback. */
   private audio?: AudioDirector;
+  /** PM-1: charge power meter, fixed bottom-center HUD slot. */
+  private powerMeter?: PowerMeterHud;
   /** Previous MatchManager state — drives WHISTLE/GOAL transition events. */
   private prevMatchState?: string;
   /** PRES-2: PASS vs KICK hint set by handleAIKick, consumed by wireShots. */
@@ -148,6 +151,9 @@ export class MatchScene extends Phaser.Scene {
     this.possession = new PossessionSystem();
     this.coordinatorHome = new TeamCoordinator('home', resolveFormation(this.formations.home));
     this.coordinatorAway = new TeamCoordinator('away', resolveFormation(this.formations.away));
+
+    // PM-1: meter visible only while the controlled player is charging.
+    this.powerMeter = new PowerMeterHud(this);
 
     // Scoring orientation: left zone = away scores, right zone = home scores
     this.leftGoal = this.add.zone(20, 270, 40, 140);
@@ -388,6 +394,11 @@ export class MatchScene extends Phaser.Scene {
       }
     }
     this.ball.preUpdate(time, delta);
+
+    // PM-1: HUD reflects the controlled player's charge state.
+    if (this.powerMeter && controlled) {
+      this.powerMeter.update(controlled.getPower(), controlled.isChargingNow());
+    }
 
     // PRES-1: per-frame camera follow (selected player + ball, config lerp,
     // look-ahead and pitch-edge clamp) — after entity preUpdate, before HUD.

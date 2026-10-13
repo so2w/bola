@@ -1,4 +1,8 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+
+// PowerMeterHud imports Phaser for the HUD class; the helper under test is pure.
+vi.mock('phaser', () => ({ default: {} }));
+
 import { meterFillWidth } from '../src/ui/PowerMeterHud';
 import { BALANCE_CONFIG } from '../src/data/balance';
 
