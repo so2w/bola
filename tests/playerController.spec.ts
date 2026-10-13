@@ -210,8 +210,8 @@ describe('HumanInputController behavioral parity (vs legacy Player bindings)', (
     const controller = new HumanInputController();
     controller.attach(scene, player);
 
-    expect(addKeyCodes().length).toBe(5); // W, A, S, D, SPACE
-    expect(addKeyCodes().filter((c) => c === c).length).toBe(5);
+    expect(addKeyCodes().length).toBe(7); // W, A, S, D + J (action), K (shot), SPACE (shot alias)
+    expect(addKeyCodes().filter((c) => c === c).length).toBe(7);
   });
 
   it('charge curve parity: SPACE down → charge accumulates, up → kick + shot(power=0.5, facing right)', () => {

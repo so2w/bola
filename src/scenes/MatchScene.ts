@@ -126,6 +126,16 @@ export class MatchScene extends Phaser.Scene {
 
     // Human controller — attached when the selection system decides
     this.humanController = new HumanInputController();
+    // MC-1/MC-2: injected match context — ball position + teammates (the
+    // controlled player changes on selection swaps, so getTeammates is a closure).
+    this.humanController.setContext({
+      getBallPos: () => ({ x: this.ball.sprite.x, y: this.ball.sprite.y }),
+      getTeammates: () =>
+        this.homeTeam
+          .filter((p) => p !== this.player)
+          .map((p) => ({ x: p.sprite.x, y: p.sprite.y })),
+      attackDir: 1,
+    });
     this.player = this.homeTeam[this.homeTeam.length - 1];
     this.humanPlayerId = null;
 
