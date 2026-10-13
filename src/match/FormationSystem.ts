@@ -1,5 +1,10 @@
-import { FORMATIONS, anchorCoords, type AnchorCoord, type FormationId } from '../data/formations';
+import { anchorCoords, resolveFormation, type AnchorCoord, type FormationId } from '../data/formations';
 
+/**
+ * Formation shape names for 11v11. '4-4-2' is data-driven via
+ * FORMATIONS['11v11']; '4-3-3' and '3-5-2' are documented stubs that fall
+ * back to 4-4-2 (out of scope for the vertical slice — see design S1).
+ */
 export type FormationType = '4-4-2' | '4-3-3' | '3-5-2';
 
 export interface Position2D {
@@ -11,40 +16,29 @@ export interface Position2D {
 export type Anchor2D = AnchorCoord;
 
 export class FormationSystem {
+  /**
+   * @deprecated Superseded by the data-driven path (FORMATIONS['11v11'] +
+   * FormationSystem.anchors). Kept as a thin adapter over the same data so
+   * legacy callers stay numerically identical; removal targeted after S2.
+   */
   public static getPositions(formation: FormationType, side: 'home' | 'away', pitchW = 960, pitchH = 540): Position2D[] {
-    const isHome = side === 'home';
-    const direction = isHome ? 1 : -1;
-    const centerX = pitchW / 2;
-
-    if (formation === '4-4-2') {
-      return [
-        // GK
-        { x: isHome ? 60 : pitchW - 60, y: pitchH / 2, role: 'GK' },
-        // Defenders (4)
-        { x: centerX - direction * 280, y: pitchH * 0.2, role: 'DF' },
-        { x: centerX - direction * 300, y: pitchH * 0.4, role: 'DF' },
-        { x: centerX - direction * 300, y: pitchH * 0.6, role: 'DF' },
-        { x: centerX - direction * 280, y: pitchH * 0.8, role: 'DF' },
-        // Midfielders (4)
-        { x: centerX - direction * 140, y: pitchH * 0.18, role: 'MF' },
-        { x: centerX - direction * 150, y: pitchH * 0.38, role: 'MF' },
-        { x: centerX - direction * 150, y: pitchH * 0.62, role: 'MF' },
-        { x: centerX - direction * 140, y: pitchH * 0.82, role: 'MF' },
-        // Forwards (2)
-        { x: centerX - direction * 40, y: pitchH * 0.38, role: 'FW' },
-        { x: centerX - direction * 40, y: pitchH * 0.62, role: 'FW' },
-      ];
+    if (formation !== '4-4-2') {
+      // Documented stub: only 4-4-2 exists as data in this slice; other
+      // shapes fall back to it instead of hardcoding parallel coord tables.
     }
-
-    // Default 4-4-2 fallback
-    return FormationSystem.getPositions('4-4-2', side, pitchW, pitchH);
+    return FormationSystem.anchors('11v11', side, pitchW, pitchH).map((a) => ({
+      x: a.x,
+      y: a.y,
+      role: a.role,
+    }));
   }
 
   /**
    * Converts data-driven normalized formation anchors to absolute pitch coords.
    * Home team: x = nx * pitchW. Away team: mirrored horizontally.
+   * Unknown ids throw a descriptive error (FORM-1 scenario 3).
    */
   public static anchors(formationId: FormationId, side: 'home' | 'away', pitchW = 960, pitchH = 540): Anchor2D[] {
-    return anchorCoords(FORMATIONS[formationId], side, pitchW, pitchH);
+    return anchorCoords(resolveFormation(formationId), side, pitchW, pitchH);
   }
 }

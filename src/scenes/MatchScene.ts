@@ -8,7 +8,8 @@ import { PossessionSystem } from '../match/PossessionSystem';
 import { HumanInputController } from '../input/HumanInputController';
 import { AIController } from '../input/AIController';
 import { TeamCoordinator } from '../ai/TeamCoordinator';
-import { FORMATIONS, anchorCoords } from '../data/formations';
+import { anchorCoords, resolveFormation, type FormationId } from '../data/formations';
+import { resolveMatchFormations, type MatchSceneInitData } from '../match/resolveFormations';
 import type { AICommand, BallSnapshot, EntitySnapshot } from '../ai/commands';
 
 /** Frame index inside the players sheet = position in manifest.spritesheets.players.frames. */
@@ -45,9 +46,19 @@ export class MatchScene extends Phaser.Scene {
   private gameOverGroup!: Phaser.GameObjects.Container;
   private resultOverlayGroup!: Phaser.GameObjects.Container;
   private cancelButton?: Phaser.GameObjects.Text;
+  private formations: { home: FormationId; away: FormationId } = { home: '3v3', away: '3v3' };
 
   constructor() {
     super('MatchScene');
+  }
+
+  /**
+   * FORM-1: formations come from scene init data (formationHome/formationAway),
+   * defaulted and validated BEFORE any entity spawns. Default is '3v3' to keep
+   * Fase 2 gameplay unchanged until a later slice flips the default to '11v11'.
+   */
+  init(data?: MatchSceneInitData): void {
+    this.formations = resolveMatchFormations(data);
   }
 
   create(): void {
@@ -60,9 +71,9 @@ export class MatchScene extends Phaser.Scene {
     // Ball
     this.ball = new Ball(this, 480, 270);
 
-    // 3v3 teams placed at data-driven formation anchors
-    const homeCoords = anchorCoords(FORMATIONS['3v3'], 'home', 960, 540);
-    const awayCoords = anchorCoords(FORMATIONS['3v3'], 'away', 960, 540);
+    // Teams placed at data-driven formation anchors (parametric FormationId)
+    const homeCoords = anchorCoords(resolveFormation(this.formations.home), 'home', 960, 540);
+    const awayCoords = anchorCoords(resolveFormation(this.formations.away), 'away', 960, 540);
     this.roles = {
       home: homeCoords.map((a) => a.role),
       away: awayCoords.map((a) => a.role),
@@ -97,12 +108,12 @@ export class MatchScene extends Phaser.Scene {
 
     // Systems
     this.manager = new MatchManager();
-    this.manager.bind(this, this.ball, this.homeTeam, this.awayTeam, { home: '3v3', away: '3v3' });
+    this.manager.bind(this, this.ball, this.homeTeam, this.awayTeam, this.formations);
     this.cameraController = new CameraController(this.cameras.main);
     this.selectionSystem = new PlayerSelectionSystem();
     this.possession = new PossessionSystem();
-    this.coordinatorHome = new TeamCoordinator('home', FORMATIONS['3v3']);
-    this.coordinatorAway = new TeamCoordinator('away', FORMATIONS['3v3']);
+    this.coordinatorHome = new TeamCoordinator('home', resolveFormation(this.formations.home));
+    this.coordinatorAway = new TeamCoordinator('away', resolveFormation(this.formations.away));
 
     // Scoring orientation: left zone = away scores, right zone = home scores
     this.leftGoal = this.add.zone(20, 270, 40, 140);
