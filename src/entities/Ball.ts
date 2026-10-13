@@ -18,7 +18,8 @@ export class Ball {
     this.body = this.sprite.body as Phaser.Physics.Arcade.Body;
     this.body.setBounce(0.8);
     this.body.setFriction(0.1);
-    this.body.setCollideWorldBounds(true);
+    // World bounds intentionally NOT colliding: boundary exits are handled by
+    // MatchManager's restart rules (RULE-1/RULE-2), not by wall bounces.
   }
 
   public preUpdate(time: number, delta: number): void {

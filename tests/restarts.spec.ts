@@ -53,7 +53,7 @@ function boundManager(opts: { ballX?: number; ballY?: number } = {}) {
   const ball = fakeBall(opts.ballX ?? 480, opts.ballY ?? 270);
   const home = [fakePlayer(100, 100), fakePlayer(200, 200), fakePlayer(300, 300)];
   const away = [fakePlayer(800, 100), fakePlayer(700, 200), fakePlayer(600, 300)];
-  mgr.bind({} as any, ball, home, away, { home: '3v3', away: '3v3' });
+  mgr.bind(undefined as any, ball, home, away, { home: '3v3', away: '3v3' });
   return { mgr, ball, home, away };
 }
 
@@ -290,7 +290,10 @@ describe('MatchManager — contextual restart integration (RULE-2)', () => {
     const beforePause = mgr.timeRemaining;
     mgr.update(1000); // inside restart countdown — clock frozen
     expect(mgr.timeRemaining).toBe(beforePause);
+    expect(mgr.state).not.toBe('PLAYING');
+    mgr.update(BALANCE_CONFIG.MATCH.OUT_OF_BOUNDS_PAUSE_MS); // countdown ends → PLAYING
     expect(mgr.state).toBe('PLAYING');
+    expect(mgr.timeRemaining).toBe(beforePause);
     mgr.update(1000); // PLAYING at 3x → 3 game-seconds
     expect(mgr.timeRemaining).toBe(beforePause - 3);
   });

@@ -17,7 +17,8 @@ function fakePlayer() {
 describe('MatchManager — team arrays + formation anchors', () => {
   it('resetMatch places every player at its formation anchor (no hardcoded coords)', () => {
     const mgr = new MatchManager();
-    mgr.state = 'GOAL';
+    // RULE-2: restart() is ignored during GOAL; full-match restart is a GAME_OVER affordance.
+    mgr.state = 'GAME_OVER';
     mgr.resetTimer = 0;
     const homeAnchors = FormationSystem.anchors('3v3', 'home');
     const awayAnchors = FormationSystem.anchors('3v3', 'away');

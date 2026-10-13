@@ -47,6 +47,9 @@ export class MatchScene extends Phaser.Scene {
   private resultOverlayGroup!: Phaser.GameObjects.Container;
   private cancelButton?: Phaser.GameObjects.Text;
   private formations: { home: FormationId; away: FormationId } = { home: '3v3', away: '3v3' };
+  /** Player → (team, id) for last-touch attribution feeds (RULE-1). */
+  private playerMeta = new Map<Player, { team: 'home' | 'away'; id: string }>();
+  private lastTouchPossessorId: string | null = null;
 
   constructor() {
     super('MatchScene');
@@ -88,6 +91,10 @@ export class MatchScene extends Phaser.Scene {
 
     this.homeByIndex = new Map(this.homeTeam.map((p, i) => [`home-${i}`, p]));
     this.awayByIndex = new Map(this.awayTeam.map((p, i) => [`away-${i}`, p]));
+    this.playerMeta = new Map<Player, { team: 'home' | 'away'; id: string }>([
+      ...[...this.homeByIndex].map(([id, p]) => [p, { team: 'home' as const, id }] as const),
+      ...[...this.awayByIndex].map(([id, p]) => [p, { team: 'away' as const, id }] as const),
+    ]);
 
     // Controllers: every player gets an AIController with kick wiring
     for (const [id, p] of this.homeByIndex) {
@@ -251,7 +258,19 @@ export class MatchScene extends Phaser.Scene {
       const ballSnap = this.buildBallSnap();
 
       // Possession per frame (domain-only wiring; consumed by coordinators)
-      this.possession.update(delta, [...homeSnaps, ...awaySnaps], ballSnap);
+      const possessorId = this.possession.update(delta, [...homeSnaps, ...awaySnaps], ballSnap);
+      // RULE-1: a capture counts as a touch
+      if (possessorId && possessorId !== this.lastTouchPossessorId) {
+        this.lastTouchPossessorId = possessorId;
+        this.manager?.touchTracker.recordTouch(
+          possessorId.startsWith('away') ? 'away' : 'home',
+          possessorId,
+          ballSnap.x,
+          ballSnap.y,
+        );
+      } else if (!possessorId) {
+        this.lastTouchPossessorId = null;
+      }
 
       const homeCmds = this.coordinatorHome.update(time, homeSnaps, ballSnap, this.possession);
       const awayCmds = this.coordinatorAway.update(time, awaySnaps, ballSnap, this.possession);
@@ -432,6 +451,11 @@ export class MatchScene extends Phaser.Scene {
 
   private wireShots(p: Player): void {
     p.onShot((power, facing) => {
+      // RULE-1: the kicker touched the ball before it flew.
+      const meta = this.playerMeta.get(p);
+      if (meta) {
+        this.manager?.touchTracker.recordTouch(meta.team, meta.id, p.sprite.x, p.sprite.y);
+      }
       this.possession?.onKick();
       this.ball.applyKick(facing, power);
       if (power > 0.6) {

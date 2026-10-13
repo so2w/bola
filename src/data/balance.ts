@@ -21,8 +21,7 @@ export const BALANCE_CONFIG = {
     PLAYER_KICK_DURATION_MS: 200,
   },
   AI: {
-    TICK_MS: 150,
-    ANCHOR_TOLERANCE_PX: 40,
+    TICK_MS: 150,    ANCHOR_TOLERANCE_PX: 40,
     CAPTURE_RADIUS_PX: 14,
     POSSESSABLE_Z: 15,
     CONTROL_RADIUS_PX: 22,
@@ -45,5 +44,16 @@ export const BALANCE_CONFIG = {
     DIVE_TRIGGER_SPEED: 200,
     DIVE_DURATION_MS: 400,
     GK_HOLD_MS: 700,
+  },
+  // Contextual restarts (RULE-1/RULE-2): throw-in support bubble, corner
+  // geometry, 6yd goal-kick spot, and the corner-exit tolerance.
+  RESTART: {
+    CORNER_EPSILON_PX: 8,
+    THROW_IN_SUPPORT_COUNT: 2,
+    THROW_IN_SUPPORT_RADIUS_PX: 120,
+    CORNER_ARC_OFFSET_PX: 20,
+    CORNER_BOX_ATTACKERS: 3,
+    CORNER_BOX_DEFENDERS: 3,
+    GOAL_KICK_SPOT_X_PX: 60,
   },
 };
