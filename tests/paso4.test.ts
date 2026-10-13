@@ -26,6 +26,8 @@ vi.mock('phaser', () => {
       'setScale',
       'setAlpha',
       'setPadding',
+      'setScrollFactor',
+      'setFillStyle',
     ]) {
       o[m] = vi.fn(function (this: any, v?: unknown) {
         if (m === 'setVisible') {
@@ -94,6 +96,8 @@ vi.mock('../src/entities/Player', () => ({
     shootWithPower = vi.fn();
     onShot = vi.fn();
     attachController = vi.fn();
+    getPower = vi.fn(() => 0);
+    isChargingNow = vi.fn(() => false);
     constructor(_scene?: unknown, _x?: number, _y?: number) {}
   },
 }));
@@ -131,7 +135,9 @@ vi.mock('../src/match/PossessionSystem', () => ({
 }));
 
 vi.mock('../src/input/HumanInputController', () => ({
-  HumanInputController: class {},
+  HumanInputController: class {
+    setContext(_ctx: unknown): void {}
+  },
 }));
 
 vi.mock('../src/input/AIController', () => ({

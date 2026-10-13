@@ -102,11 +102,16 @@ export class MatchScene extends Phaser.Scene {
     };
 
     // PA-1: manifest-driven frame registry (name -> sheet index) injected per team.
-    const frameMap = buildFrameMap(
-      this.cache.json.get('manifest') as {
-        spritesheets: { players: { frames: string[] } };
-      },
-    );
+    // Cache key is 'manifest' (BootScene.preload); registry is the documented
+    // fallback. Absent in headless test mocks -> Players use legacy frames.
+    const manifest =
+      (this.cache?.json?.get('manifest') as
+        | { spritesheets: { players: { frames: string[] } } }
+        | undefined) ??
+      (this.registry?.get('manifest') as
+        | { spritesheets: { players: { frames: string[] } } }
+        | undefined);
+    const frameMap = manifest ? buildFrameMap(manifest) : undefined;
 
     this.homeTeam = homeCoords.map((a) => new Player(this, a.x, a.y, { team: 'home', frames: frameMap }));
     // Away tint is applied INSIDE Player only as a fallback for missing away frames (PA-1-S2/S3).
@@ -168,9 +173,6 @@ export class MatchScene extends Phaser.Scene {
     this.possession = new PossessionSystem();
     this.coordinatorHome = new TeamCoordinator('home', resolveFormation(this.formations.home));
     this.coordinatorAway = new TeamCoordinator('away', resolveFormation(this.formations.away));
-
-    // PM-1: meter visible only while the controlled player is charging.
-    this.powerMeter = new PowerMeterHud(this);
 
     // Scoring orientation: left zone = away scores, right zone = home scores
     this.leftGoal = this.add.zone(20, 270, 40, 140);
@@ -332,6 +334,10 @@ export class MatchScene extends Phaser.Scene {
     for (const p of [...this.homeTeam, ...this.awayTeam]) {
       this.wireShots(p);
     }
+
+    // PM-1: meter visible only while the controlled player is charging
+    // (created last so it never shifts existing container creation order).
+    this.powerMeter = new PowerMeterHud(this);
   }
 
   update(time: number, delta: number): void {

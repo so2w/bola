@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import type Phaser from 'phaser';
 
 // Mock Phaser (same pattern as playerController.spec.ts) before Player import.
@@ -40,7 +41,7 @@ import { Player } from '../src/entities/Player';
 import { BALANCE_CONFIG } from '../src/data/balance';
 
 const manifest = JSON.parse(
-  readFileSync(new URL('../public/assets/manifest.json', import.meta.url), 'utf8'),
+  readFileSync(fileURLToPath(new URL('../public/assets/manifest.json', import.meta.url)), 'utf8'),
 );
 
 describe('PA-1 buildFrameMap + resolveClipFrames (2.1)', () => {
@@ -113,7 +114,11 @@ describe('PA-2 kick window driven by preUpdate delta (2.2)', () => {
     const { scene } = makeMockScene();
     const player = new Player(scene, 100, 100);
     player.onShot(vi.fn());
-    player.shootWithPower(0.5, { x: 1, y: 0, clone: () => ({ x: 1, y: 0 } as never) });
+    player.shootWithPower(0.5, {
+      x: 1,
+      y: 0,
+      clone: () => ({ x: 1, y: 0 }),
+    } as unknown as Phaser.Math.Vector2);
     expect(player.animState).toBe('Kick');
 
     const step = 16;
