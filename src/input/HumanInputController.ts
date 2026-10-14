@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import type { Player, IPlayerController } from '../entities/Player';
 import { BALANCE_CONFIG } from '../data/balance';
+import { choosePassTarget } from './passTarget';
 
 /** Point-ish positions consumed by the contextual action logic. */
 export interface Point {
@@ -18,6 +19,8 @@ export interface PassContext {
   /** +1 when the human team attacks rightward. */
   attackDir?: 1 | -1;
 }
+
+export { choosePassTarget } from './passTarget';
 
 /**
  * Human keyboard controller — WASD/arrows movement, contextual ACTION (J) and
@@ -124,15 +127,14 @@ export class HumanInputController implements IPlayerController {
       return;
     }
     const target = this.pickPassTarget();
-    // MC-1-S2: empty cone -> no-op (EMPTY_CONE_FALLBACK === 'none').
     if (target) {
       player.passTo(target);
     }
   }
 
   /**
-   * MC-1: forward-most teammate inside the forward pass cone and max range
-   * around the attack direction. Deterministic (no RNG); first wins ties.
+   * MC-1: forward-most teammate inside the forward pass cone and max range;
+   * empty cone falls back per EMPTY_CONE_FALLBACK (default 'forward').
    */
   public pickPassTarget(): Point | null {
     const player = this.player;
@@ -140,31 +142,12 @@ export class HumanInputController implements IPlayerController {
     if (!player || !ctx) {
       return null;
     }
-    const cfg = BALANCE_CONFIG.INPUT;
-    const attackDir = ctx.attackDir ?? 1;
-    const halfAngleRad = ((cfg.PASS_CONE_DEG / 2) * Math.PI) / 180;
-    const minDot = Math.cos(halfAngleRad);
-
-    let best: Point | null = null;
-    let bestForward = -Infinity;
-    for (const mate of ctx.getTeammates()) {
-      const dx = mate.x - player.sprite.x;
-      const dy = mate.y - player.sprite.y;
-      const forward = dx * attackDir;
-      const dist = Math.hypot(dx, dy);
-      if (forward <= 0 || dist > cfg.PASS_MAX_RANGE_PX || dist === 0) {
-        continue;
-      }
-      const dot = (dx * attackDir) / dist; // cone axis is horizontal
-      if (dot < minDot) {
-        continue;
-      }
-      if (forward > bestForward) {
-        bestForward = forward;
-        best = mate;
-      }
-    }
-    return best;
+    return choosePassTarget(
+      { x: player.sprite.x, y: player.sprite.y },
+      ctx.getTeammates(),
+      ctx.attackDir ?? 1,
+      BALANCE_CONFIG.INPUT,
+    );
   }
 
   /** MC-2: shot release only fires when the ball is within pickup radius. */

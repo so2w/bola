@@ -159,10 +159,14 @@ export class Player {
     this.shotCallback?.(power, facing, 'KICK');
   }
 
+  /** Last pass destination (MatchScene uses it to hint the receiver). */
+  public lastPassTarget: { x: number; y: number } | null = null;
+
   /**
    * MC-1: contextual pass — kicks toward a teammate at pass power.
    */
   public passTo(target: { x: number; y: number }): void {
+    this.lastPassTarget = { x: target.x, y: target.y };
     const dx = target.x - this.sprite.x;
     const dy = target.y - this.sprite.y;
     const facing = new Phaser.Math.Vector2(dx, dy);

@@ -14,7 +14,8 @@ describe('Fase 4 — BALANCE_CONFIG groups (1.1)', () => {
     expect(INPUT.PASS_PICKUP_RADIUS_PX).toBe(28);
     expect(INPUT.PASS_CONE_DEG).toBe(45);
     expect(INPUT.PASS_MAX_RANGE_PX).toBe(260);
-    expect(INPUT.EMPTY_CONE_FALLBACK).toBe('none');
+    // Playtest round 3: empty pass cone falls back to a forward teammate.
+    expect(INPUT.EMPTY_CONE_FALLBACK).toBe('forward');
   });
 
   it('exposes POWER_METER bounds and colors', () => {

@@ -93,8 +93,12 @@ export const BALANCE_CONFIG = {
     PASS_PICKUP_RADIUS_PX: 28,
     PASS_CONE_DEG: 45,
     PASS_MAX_RANGE_PX: 260,
-    EMPTY_CONE_FALLBACK: 'none' as const,
+    EMPTY_CONE_FALLBACK: 'forward' as 'none' | 'forward',
     PASS_POWER_PCT: 0.4,
+    // Playtest round 3 (pass feel): passes are visibly lifted (z bump) and the
+    // intended receiver gets a short possession hint (wider capture radius).
+    PASS_LIFT_Z: 26,
+    PASS_HINT_MS: 900,
   },
   // Playtest round 3 (controls discoverability): static controls hint shown
   // during KICKOFF and the first seconds of PLAYING.

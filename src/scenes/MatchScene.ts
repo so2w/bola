@@ -71,7 +71,8 @@ export class MatchScene extends Phaser.Scene {
   private prevMatchState?: string;
   /** PRES-2: PASS vs KICK hint set by handleAIKick, consumed by wireShots. */
   private pendingShotKind = new Map<Player, 'KICK' | 'PASS'>();
-
+  /** AI pass destinations (receiver possession hint), consumed by wireShots. */
+  private pendingPassTarget = new Map<Player, { x: number; y: number }>();
   /** MF-1/MF-2: goal-mouth feedback guards (POST once per shot, cheer once per goal). */
   private goalFeedback = new GoalFeedback();
   /** MF-2: net flash overlays for each goal side, hidden at rest. */
@@ -427,6 +428,7 @@ export class MatchScene extends Phaser.Scene {
         }
         this.player?.cancelCharge();
         this.pendingShotKind.clear();
+        this.pendingPassTarget.clear();
       }
       this.prevMatchState = this.manager.state;
     }
@@ -707,6 +709,9 @@ export class MatchScene extends Phaser.Scene {
     }
       // PRES-2: tag the shot kind so the shot sound is PASS vs KICK by command.
       this.pendingShotKind.set(p, cmd.action === 'PASS' ? 'PASS' : 'KICK');
+      if (cmd.action === 'PASS') {
+        this.pendingPassTarget.set(p, { x: cmd.targetX, y: cmd.targetY });
+      }
     p.shootWithPower(cmd.power ?? 0.3, new Phaser.Math.Vector2(facingVec.x, facingVec.y));
   }
 
@@ -773,6 +778,16 @@ export class MatchScene extends Phaser.Scene {
           ? applyKickoffGracePowerCap(power, this.playResumedAtMs, this.currentTimeMs)
           : power;
       this.ball.applyKick(facing, effectivePower);
+      // Playtest round 3 pass feel: a pass is visibly lifted and the intended
+      // receiver gets a widened capture radius for the arrival moment.
+      if (kindEvent === 'PASS') {
+        this.ball.zTarget = Math.max(this.ball.zTarget, BALANCE_CONFIG.INPUT.PASS_LIFT_Z);
+        const hintTarget = p.lastPassTarget ?? this.pendingPassTarget.get(p);
+        if (hintTarget) {
+          this.possession?.setPassHint(hintTarget);
+        }
+      }
+      this.pendingPassTarget.delete(p);
       // PRES-2 + MC-1: PASS vs KICK hint (AI map or human contextual pass).
       this.pendingShotKind.delete(p);
       this.audio?.playEvent(kindEvent);
