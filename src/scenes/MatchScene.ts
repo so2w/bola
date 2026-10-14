@@ -14,6 +14,7 @@ import { BALANCE_CONFIG } from '../data/balance';
 import { buildFrameMap } from '../entities/frameMap';
 import { GoalFeedback } from '../match/GoalFeedback';
 import { anchorCoords, resolveFormation, type FormationId } from '../data/formations';
+import { canApplyKick, gateKickCommand } from '../match/kickGate';
 import { resolveMatchFormations, type MatchSceneInitData } from '../match/resolveFormations';
 import type { AICommand, BallSnapshot, EntitySnapshot } from '../ai/commands';
 
@@ -358,6 +359,20 @@ export class MatchScene extends Phaser.Scene {
           this.pulseNet(this.lastScoringSide);
         }
       }
+      // Kick-gate hygiene on restart: any transition into KICKOFF drops stale
+      // cached AI commands (e.g. a GK DISTRIBUTE requested while the ball sat
+      // inside the goal during the GOAL freeze) and cancels an in-flight
+      // human charge so nothing fires the moment PLAYING resumes.
+      if (this.prevMatchState !== 'KICKOFF' && this.manager.state === 'KICKOFF') {
+        for (const ai of this.aiControllers.values()) {
+          ai.setCommand(undefined);
+        }
+        for (const ai of this.awayControllers.values()) {
+          ai.setCommand(undefined);
+        }
+        this.player?.cancelCharge();
+        this.pendingShotKind.clear();
+      }
       this.prevMatchState = this.manager.state;
     }
 
@@ -463,6 +478,9 @@ export class MatchScene extends Phaser.Scene {
       if (canPlay) {
         controlled.preUpdate(time, delta);
       } else {
+        // A charge held across a stoppage never resumes: cancel it so the
+        // next key release cannot fire a shot from a stale charge.
+        controlled.cancelCharge();
         controlled.updateAnimation(delta);
       }
     }
@@ -564,20 +582,29 @@ export class MatchScene extends Phaser.Scene {
     }
   }
 
-  /** AI kick dispatch: SHOOT/PASS/DISTRIBUTE trigger a guarded kick toward the command target. */
+  /**
+   * AI kick dispatch: SHOOT/PASS/DISTRIBUTE trigger a guarded kick toward the
+   * command target. Defense-in-depth (kickGate): the command is ignored unless
+   * the match is PLAYING and the kicker is next to the ball — a stale command
+   * surviving a restart can never send the center-spot ball flying into the
+   * wrong half.
+   */
   private handleAIKick(p: Player, cmd: AICommand): void {
     if (cmd.action !== 'SHOOT' && cmd.action !== 'PASS' && cmd.action !== 'DISTRIBUTE') {
       return;
     }
-    const dx = cmd.targetX - p.sprite.x;
-    const dy = cmd.targetY - p.sprite.y;
-    const facing = new Phaser.Math.Vector2(dx, dy);
-    if (facing.lengthSq() > 0) {
-      facing.normalize();
+    const facingVec = gateKickCommand(
+      this.manager?.state,
+      cmd,
+      { x: p.sprite.x, y: p.sprite.y },
+      { x: this.ball.sprite.x, y: this.ball.sprite.y },
+    );
+    if (!facingVec) {
+      return;
     }
     // PRES-2: tag the shot kind so the shot sound is PASS vs KICK by command.
     this.pendingShotKind.set(p, cmd.action === 'PASS' ? 'PASS' : 'KICK');
-    p.shootWithPower(cmd.power ?? 0.3, facing);
+    p.shootWithPower(cmd.power ?? 0.3, new Phaser.Math.Vector2(facingVec.x, facingVec.y));
   }
 
   /** MF-2: config-timed net flash pulse (alpha 0.6 -> 0, two cycles). */
@@ -602,6 +629,12 @@ export class MatchScene extends Phaser.Scene {
 
   private wireShots(p: Player): void {
     p.onShot((power, facing, cbKind) => {
+      // Playtest remediation: a kick (AI or human key release) may move the
+      // ball ONLY during live play. Human key listeners are event-driven and
+      // bypass the per-frame canPlay gating, so the state check lives here.
+      if (!canApplyKick(this.manager?.state)) {
+        return;
+      }
       // RULE-1: the kicker touched the ball before it flew.
       const meta = this.playerMeta.get(p);
       if (meta) {

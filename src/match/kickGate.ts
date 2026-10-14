@@ -1,0 +1,62 @@
+import { BALANCE_CONFIG } from '../data/balance';
+import type { MatchState } from '../systems/MatchManager';
+import type { AICommand } from '../ai/commands';
+
+/**
+ * Playtest remediation (fase 4, golpe legible): central guard for anything
+ * that can send the ball flying.
+ *
+ * Root cause of the playtest report "me marcan gol automáticamente" /
+ * "se cambian de portería solos": AI kicks (SHOOT/PASS/DISTRIBUTE) and the
+ * human charge release were NOT gated by the match state nor by ball
+ * proximity. A stale command surviving a restart (e.g. a GK DISTRIBUTE
+ * commanded while the ball sat inside a goal during the GOAL freeze, or a
+ * SHOOT cached at the 150ms AI cadence) fired ball.applyKick from the center
+ * spot toward whichever target the AI had last picked — sending the ball
+ * toward the kicker's own half. Every kick now flows through this gate:
+ * kicks may ONLY be applied while the match is PLAYING and only by a kicker
+ * whose body is next to the ball.
+ */
+
+/** Kicks are legal exclusively during live play. */
+export function canApplyKick(state: MatchState | string | undefined): boolean {
+  return state === 'PLAYING';
+}
+
+/** The kicker must be within reach of the ball to affect it at all. */
+export function kickHasBall(
+  kickerX: number,
+  kickerY: number,
+  ballX: number,
+  ballY: number,
+  radiusPx: number = BALANCE_CONFIG.INPUT.PASS_PICKUP_RADIUS_PX,
+): boolean {
+  return Math.hypot(ballX - kickerX, ballY - kickerY) <= radiusPx;
+}
+
+/**
+ * Full kick gate for AI commands (SHOOT/PASS/DISTRIBUTE) and human releases.
+ * Returns the normalized facing vector when the kick may be applied,
+ * otherwise null.
+ */
+export function gateKickCommand(
+  state: MatchState | string | undefined,
+  cmd: Pick<AICommand, 'targetX' | 'targetY'>,
+  kicker: { x: number; y: number },
+  ball: { x: number; y: number },
+  radiusPx?: number,
+): { x: number; y: number } | null {
+  if (!canApplyKick(state)) {
+    return null;
+  }
+  if (!kickHasBall(kicker.x, kicker.y, ball.x, ball.y, radiusPx)) {
+    return null;
+  }
+  const dx = cmd.targetX - kicker.x;
+  const dy = cmd.targetY - kicker.y;
+  const len = Math.hypot(dx, dy);
+  if (len === 0) {
+    return null;
+  }
+  return { x: dx / len, y: dy / len };
+}

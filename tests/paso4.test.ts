@@ -98,6 +98,7 @@ vi.mock('../src/entities/Player', () => ({
     attachController = vi.fn();
     getPower = vi.fn(() => 0);
     isChargingNow = vi.fn(() => false);
+    cancelCharge = vi.fn();
     constructor(_scene?: unknown, _x?: number, _y?: number) {}
   },
 }));
@@ -275,6 +276,7 @@ describe('MatchScene Game Over visibility', () => {
       body: { setVelocity: vi.fn(), setAcceleration: vi.fn() },
       preUpdate: vi.fn(),
       updateAnimation: vi.fn(),
+      cancelCharge: vi.fn(),
     };
     scene.ball = { preUpdate: vi.fn() };
     scene.clockText = { setText: vi.fn() };
@@ -454,6 +456,7 @@ describe('MatchScene result overlay toggles canPlay', () => {
       body: playerBody,
       preUpdate: vi.fn(),
       updateAnimation: vi.fn(),
+      cancelCharge: vi.fn(),
     };
     scene.ball = { preUpdate: vi.fn() };
     scene.manager = manager;
