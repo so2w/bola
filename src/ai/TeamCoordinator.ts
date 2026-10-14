@@ -38,12 +38,13 @@ export class TeamCoordinator {
     snaps: EntitySnapshot[],
     ball: BallSnapshot,
     possession: PossessionSystem,
+    opponents?: EntitySnapshot[],
   ): Map<string, AICommand> {
     if (nowMs - this.lastTickMs < BALANCE_CONFIG.AI.TICK_MS) {
       return this.commands; // cached, no recompute
     }
     this.lastTickMs = nowMs;
-    this.tickInternal(nowMs, snaps, ball, possession);
+    this.tickInternal(nowMs, snaps, ball, possession, opponents);
     return this.commands;
   }
 
@@ -67,6 +68,7 @@ export class TeamCoordinator {
     snaps: EntitySnapshot[],
     ball: BallSnapshot,
     possession: PossessionSystem,
+    opponents?: EntitySnapshot[],
   ): void {
     const cfg = BALANCE_CONFIG.AI;
 
@@ -133,6 +135,7 @@ export class TeamCoordinator {
         pressers: this.pressers,
         attackDir,
         nowMs,
+        opponents,
       });
       this.commands.set(snap.id, cmd);
     });

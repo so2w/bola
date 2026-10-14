@@ -54,6 +54,20 @@ export const BALANCE_CONFIG = {
     ARRIVAL_MIN_SPEED_PCT: 0.25,
     IDLE_WANDER_RADIUS_PX: 6,
     IDLE_WANDER_SPEED: 0.002,
+    // Fase 4 carrier feel (W1 follow-up): the ball holder no longer runs a
+    // perfect straight line at the goal. Small deterministic heading wobble
+    // (pure f(time, entity phase)), pressure-based speed modulation from
+    // per-tick opponent counts, an open-lane boost, and a curved approach
+    // that rotates the goal target away from the nearest ahead defender.
+    DRIBBLE_WOBBLE_AMPLITUDE_DEG: 8,
+    DRIBBLE_WOBBLE_PERIOD_MS: 900,
+    DRIBBLE_PRESSURE_SLOW_PX: 90,
+    DRIBBLE_PRESSURE_SLOW_FACTOR: 0.75,
+    DRIBBLE_PRESSURE_REF_COUNT: 3,
+    DRIBBLE_OPEN_LANE_BOOST: 1.1,
+    DRIBBLE_CURVE_MAX_DEG: 25,
+    DRIBBLE_CURVE_RANGE_PX: 160,
+    DRIBBLE_CORRIDOR_HALF_WIDTH_PX: 40,
   },
   SELECTION: {
     W1: 1.0,

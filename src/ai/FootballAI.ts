@@ -1,11 +1,18 @@
 import { BALANCE_CONFIG } from '../data/balance';
 import type { AICommand, EntitySnapshot, MatchContext } from './commands';
 import type { Rng } from '../utils/rng';
+import {
+  countPressure,
+  curvedGoalTarget,
+  dribbleSpeedFactor,
+  laneIsClear,
+  type DribbleFeelCfg,
+} from './dribbleFeel';
 
 /** Per-player FSM states for field players (AGENTS.md §11: utility + light FSM). */
 export type FieldState = 'DEFENDING' | 'ATTACKING' | 'BALL_HOLDER';
 
-interface AICfg {
+interface AICfg extends DribbleFeelCfg {
   SHOOT_RANGE_PX: number;
   /**
    * Anti-jitter hysteresis: how long a ball holder keeps the dribble intent
@@ -89,8 +96,26 @@ export class FootballAI {
       };
     }
 
-    // Dribble forward toward the goal
-    return { targetX: goalX, targetY: goalY, action: 'MOVE' };
+    // Dribble forward — but not on rails (fase 4 carrier feel): pressure
+    // modulates speed, an open lane grants a small boost, and the goal target
+    // bends away from the nearest ahead defender. All metrics come from the
+    // tick's snapshot data (no per-frame O(n^2)); the per-frame heading wobble
+    // lives in AIController.
+    const opponents = ctx.opponents ?? [];
+    const dirX = distToGoal > 0 ? (goalX - snap.x) / distToGoal : 1;
+    const dirY = distToGoal > 0 ? (goalY - snap.y) / distToGoal : 0;
+    const pressure = countPressure(snap.x, snap.y, opponents, this.cfg.DRIBBLE_PRESSURE_SLOW_PX);
+    const laneOpen = laneIsClear(
+      snap.x,
+      snap.y,
+      dirX,
+      dirY,
+      opponents,
+      this.cfg.DRIBBLE_CORRIDOR_HALF_WIDTH_PX,
+    );
+    const speedFactor = dribbleSpeedFactor(pressure, laneOpen, this.cfg);
+    const target = curvedGoalTarget(snap.x, snap.y, goalX, goalY, opponents, this.cfg);
+    return { targetX: target.x, targetY: target.y, action: 'MOVE', dribble: true, speedFactor };
   }
 
   /**

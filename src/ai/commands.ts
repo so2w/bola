@@ -18,6 +18,16 @@ export interface AICommand {
   targetY: number;
   action: AIAction;
   power?: number;
+  /**
+   * Carrier feel (fase 4): true on BALL_HOLDER dribble MOVE commands. Tells
+   * the locomotion layer to apply the deterministic heading wobble.
+   */
+  dribble?: boolean;
+  /**
+   * Carrier feel: per-tick speed multiplier from the pressure metric and
+   * open-lane boost (defaults to 1 when absent).
+   */
+  speedFactor?: number;
 }
 
 export type TeamSide = 'home' | 'away';
@@ -56,4 +66,10 @@ export interface MatchContext {
    * it the FSM reverts instantly on possession loss (no hysteresis).
    */
   nowMs?: number;
+  /**
+   * Carrier feel (fase 4): opponent snapshots, provided by the coordinator at
+   * its regular tick so the ball holder can derive the pressure metric,
+   * lane-clear check and curved approach without any per-frame O(n^2).
+   */
+  opponents?: EntitySnapshot[];
 }

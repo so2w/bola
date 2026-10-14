@@ -2,9 +2,10 @@ import type Phaser from 'phaser';
 import type { Player, IPlayerController } from '../entities/Player';
 import type { AICommand } from '../ai/commands';
 import { BALANCE_CONFIG } from '../data/balance';
+import { wobbleOffsetDeg, type DribbleFeelCfg } from '../ai/dribbleFeel';
 
 /** Locomotion tuning consumed from BALANCE_CONFIG.AI (playtest round 3). */
-export interface LocomotionCfg {
+export interface LocomotionCfg extends DribbleFeelCfg {
   ARRIVAL_RADIUS_PX: number;
   ARRIVAL_MIN_SPEED_PCT: number;
   IDLE_WANDER_RADIUS_PX: number;
@@ -84,19 +85,35 @@ export class AIController implements IPlayerController {
       ty += Math.sin(angle) * this.cfg.IDLE_WANDER_RADIUS_PX;
     }
 
-    const dx = tx - pos.x;
-    const dy = ty - pos.y;
+    let dx = tx - pos.x;
+    let dy = ty - pos.y;
     const len = Math.hypot(dx, dy);
     if (len === 0) {
       return { vx: 0, vy: 0 };
     }
 
+    // Carrier feel (fase 4): heading wobble bends the dribble path. It only
+    // applies to dribble commands beyond the anchor tolerance, so it never
+    // fights the idle wander (wander owns the at-target zone above).
+    let speedFactor = 1;
+    if (cmd.dribble && dist > this.cfg.ARRIVAL_RADIUS_PX * 0.5) {
+      const wob = (wobbleOffsetDeg(this.elapsedMs, this.wanderPhase, this.cfg) * Math.PI) / 180;
+      const cos = Math.cos(wob);
+      const sin = Math.sin(wob);
+      const rx = dx * cos - dy * sin;
+      const ry = dx * sin + dy * cos;
+      dx = rx;
+      dy = ry;
+      speedFactor = cmd.speedFactor ?? 1;
+    }
+
     // Arrival damping: full speed beyond ARRIVAL_RADIUS_PX, linear decay to
-    // ARRIVAL_MIN_SPEED_PCT inside it.
+    // ARRIVAL_MIN_SPEED_PCT inside it. Dribble pressure/boost composes on top.
     const maxSpeed = this.player?.maxSpeed ?? BALANCE_CONFIG.PHYSICS.PLAYER_MAX_SPEED;
     const scale = Math.min(1, Math.max(len / this.cfg.ARRIVAL_RADIUS_PX, this.cfg.ARRIVAL_MIN_SPEED_PCT));
-    const speed = maxSpeed * scale;
-    return { vx: (dx / len) * speed, vy: (dy / len) * speed };
+    const speed = maxSpeed * scale * speedFactor;
+    const wlen = Math.hypot(dx, dy);
+    return { vx: (dx / wlen) * speed, vy: (dy / wlen) * speed };
   }
 
   public update(dtMs: number): void {

@@ -482,8 +482,11 @@ export class MatchScene extends Phaser.Scene {
       this.prevBallX = this.ball.sprite.x;
       this.prevBallY = this.ball.sprite.y;
 
-      const homeCmds = this.coordinatorHome.update(time, homeSnaps, ballSnap, this.possession);
-      const awayCmds = this.coordinatorAway.update(time, awaySnaps, ballSnap, this.possession);
+      // Carrier feel (fase 4): each coordinator also receives the OPPONENT
+      // snapshots so the ball holder can derive its pressure/curve metrics at
+      // the regular tick cadence (no per-frame O(n^2)).
+      const homeCmds = this.coordinatorHome.update(time, homeSnaps, ballSnap, this.possession, awaySnaps);
+      const awayCmds = this.coordinatorAway.update(time, awaySnaps, ballSnap, this.possession, homeSnaps);
 
       // Per-frame GK evaluation (design 3.0: NEVER inside the 150ms cadence)
       const gkHome = homeSnaps.find((s) => s.role === 'GK');
