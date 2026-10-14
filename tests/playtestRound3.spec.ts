@@ -5,7 +5,7 @@ import { GoalkeeperAI } from '../src/ai/GoalkeeperAI';
 import { PossessionSystem } from '../src/match/PossessionSystem';
 import { BallCaptureSystem } from '../src/match/BallCaptureSystem';
 import { AIController } from '../src/input/AIController';
-import { choosePassTarget } from '../src/input/HumanInputController';
+import { choosePassTarget } from '../src/input/passTarget';
 import { shouldShowControlsHint } from '../src/ui/controlsHint';
 import { anchorCoords, resolveFormation } from '../src/data/formations';
 import { BALANCE_CONFIG } from '../src/data/balance';
@@ -66,9 +66,9 @@ describe('playtest round 3/TASK 1.1 — BallCaptureSystem (sticky trap)', () => 
     const cap = new BallCaptureSystem();
     // Ball travelling along y=270 at pass speed (240px/s < TRAP_MAX_SPEED).
     const prev: BallSnapshot = { x: 400, y: 270, z: 0, vx: 240, vy: 0 };
-    // One frame later the segment passes right through the player's body (420,270).
+    // One frame later the segment passes right through the player's body.
     const now: BallSnapshot = { x: 404, y: 270, z: 0, vx: 240, vy: 0 };
-    const ev = cap.evaluate([fieldPlayer(420, 270)], prev, now);
+    const ev = cap.evaluate([fieldPlayer(402, 270)], prev, now);
     expect(ev).not.toBeNull();
     expect(ev?.playerId).toBe('away-2');
     expect(ev?.stopBall).toBe(true);
@@ -78,7 +78,7 @@ describe('playtest round 3/TASK 1.1 — BallCaptureSystem (sticky trap)', () => 
     const cap = new BallCaptureSystem();
     const prev: BallSnapshot = { x: 400, y: 270, z: 0, vx: 600, vy: 0 };
     const now: BallSnapshot = { x: 410, y: 270, z: 0, vx: 600, vy: 0 };
-    const ev = cap.evaluate([fieldPlayer(420, 270)], prev, now);
+    const ev = cap.evaluate([fieldPlayer(405, 270)], prev, now);
     expect(ev).toBeNull();
   });
 
@@ -86,10 +86,10 @@ describe('playtest round 3/TASK 1.1 — BallCaptureSystem (sticky trap)', () => 
     const cap = new BallCaptureSystem();
     const prev: BallSnapshot = { x: 850, y: 270, z: 0, vx: 600, vy: 0 };
     const now: BallSnapshot = { x: 860, y: 270, z: 0, vx: 600, vy: 0 };
-    // GK at 902: segment does not reach him yet — no capture.
-    expect(cap.evaluate([gk(902, 270)], prev, now)).toBeNull();
-    // GK moved out to 880 to meet it: capture.
-    const ev = cap.evaluate([gk(880, 270)], prev, now);
+    // GK back on his line: the segment does not reach him yet — no capture.
+    expect(cap.evaluate([gk(920, 270)], prev, now)).toBeNull();
+    // GK stepped out to meet the flight path: claim inside CLAIM_RADIUS.
+    const ev = cap.evaluate([gk(858, 270)], prev, now);
     expect(ev?.playerId).toBe('away-0');
   });
 
