@@ -6,6 +6,9 @@ export const BALANCE_CONFIG = {
     KICKOFF_PAUSE_MS: 1500,
     GOAL_PAUSE_MS: 2000,
     OUT_OF_BOUNDS_PAUSE_MS: 2000,
+    // Playtest round 2: after any transition into PLAYING, kicks aimed at the
+    // kicker's own half are suppressed for this window (kickoff own-goal guard).
+    KICKOFF_GRACE_MS: 800,
   },
   PHYSICS: {
     PITCH_WIDTH: 960,
@@ -27,6 +30,11 @@ export const BALANCE_CONFIG = {
     CONTROL_RADIUS_PX: 22,
     PRESS_COUNT_MAX: 2,
     SHOOT_RANGE_PX: 120,
+    // Playtest round 2 (jitter) hysteresis: a ball holder that steps outside
+    // CONTROL_RADIUS for a few frames keeps the dribble intent; presser slots
+    // only swap when the challenger is closer by more than this margin.
+    BALL_HOLDER_GRACE_MS: 600,
+    PRESS_SWITCH_MARGIN_PX: 30,
   },
   SELECTION: {
     W1: 1.0,

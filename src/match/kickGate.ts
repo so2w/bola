@@ -60,3 +60,25 @@ export function gateKickCommand(
   }
   return { x: dx / len, y: dy / len };
 }
+
+/**
+ * Playtest round 2 kickoff grace: true while `nowMs` is within
+ * MATCH.KICKOFF_GRACE_MS of the last transition into PLAYING. During the
+ * grace window own-half kicks are suppressed (the "apenas hago el saque me
+ * hacen gol" guard: a release while sprinting toward the ball from behind can
+ * no longer blast the ball into the own net off the kickoff).
+ */
+export function isKickoffGraceActive(
+  playResumedAtMs: number | null | undefined,
+  nowMs: number,
+): boolean {
+  if (playResumedAtMs === null || playResumedAtMs === undefined) {
+    return false;
+  }
+  return nowMs - playResumedAtMs < BALANCE_CONFIG.MATCH.KICKOFF_GRACE_MS;
+}
+
+/** True when the kick direction's horizontal component points at the own half. */
+export function aimsIntoOwnHalf(attackDir: 1 | -1, dirX: number): boolean {
+  return dirX * attackDir < 0;
+}
