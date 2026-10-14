@@ -63,7 +63,7 @@ export class TeamCoordinator {
   }
 
   private tickInternal(
-    _nowMs: number,
+    nowMs: number,
     snaps: EntitySnapshot[],
     ball: BallSnapshot,
     possession: PossessionSystem,
@@ -75,21 +75,42 @@ export class TeamCoordinator {
     const possessor = possessorId !== null ? snaps.find((s) => s.id === possessorId) : undefined;
     const myTeamPossession = possessor !== undefined && possessor.team === this.teamId;
 
-    // Press assignment: at most PRESS_COUNT_MAX nearest field players
+    // Press assignment: at most PRESS_COUNT_MAX nearest field players.
+    // Playtest round 2 anti-jitter: existing pressers are sticky — a challenger
+    // only replaces a presser when it is closer by MORE than
+    // PRESS_SWITCH_MARGIN_PX, so two defenders walking side-by-side don't swap
+    // PRESS <-> anchor targets (a 180° velocity flip) every 150ms tick.
     const anchors = anchorCoords(this.formation, this.teamId, BALANCE_CONFIG.PHYSICS.PITCH_WIDTH, BALANCE_CONFIG.PHYSICS.PITCH_HEIGHT);
     if (myTeamPossession) {
       this.pressers = [];
     } else {
-      const candidates = snaps.filter((s) => s.role !== 'GK');
-      const sorted = [...candidates].sort((a, b) => {
-        const da = Math.hypot(a.x - ball.x, a.y - ball.y);
-        const db = Math.hypot(b.x - ball.x, b.y - ball.y);
-        if (da !== db) {
-          return da - db;
+      const ranked = snaps
+        .filter((s) => s.role !== 'GK')
+        .map((s) => ({ id: s.id, d: Math.hypot(s.x - ball.x, s.y - ball.y) }))
+        .sort((a, b) => (a.d !== b.d ? a.d - b.d : a.id.localeCompare(b.id)));
+      const incumbents = ranked.filter((r) => this.pressers.includes(r.id));
+      const next = incumbents.slice(0, cfg.PRESS_COUNT_MAX);
+      for (const cand of ranked) {
+        if (next.length >= cfg.PRESS_COUNT_MAX) {
+          break;
         }
-        return a.id.localeCompare(b.id); // deterministic tie-break
-      });
-      this.pressers = sorted.slice(0, cfg.PRESS_COUNT_MAX).map((s) => s.id);
+        if (!next.some((n) => n.id === cand.id)) {
+          // Slot open (previous presser gone/GK/overflow): fill by distance.
+          next.push(cand);
+        }
+      }
+      // All slots filled: a challenger replaces the WORST incumbent only when
+      // decisively closer (hysteresis); ties never swap.
+      for (const cand of ranked) {
+        if (next.some((n) => n.id === cand.id)) {
+          continue;
+        }
+        const worst = next.reduce((w, n) => (n.d > w.d ? n : w), next[0]);
+        if (worst && cand.d + cfg.PRESS_SWITCH_MARGIN_PX < worst.d) {
+          next[next.indexOf(worst)] = cand;
+        }
+      }
+      this.pressers = next.map((n) => n.id);
     }
 
     // Per-player FSM ticks (GK excluded — tickGK handles it per frame)
@@ -111,6 +132,7 @@ export class TeamCoordinator {
         anchorY: anchor.y,
         pressers: this.pressers,
         attackDir,
+        nowMs,
       });
       this.commands.set(snap.id, cmd);
     });

@@ -50,4 +50,10 @@ export interface MatchContext {
   anchorY: number;
   pressers: string[];
   attackDir: 1 | -1;
+  /**
+   * Coordinator tick timestamp (ms). Drives the BALL_HOLDER grace hysteresis
+   * (playtest round 2 anti-jitter). Optional for legacy call sites: without
+   * it the FSM reverts instantly on possession loss (no hysteresis).
+   */
+  nowMs?: number;
 }

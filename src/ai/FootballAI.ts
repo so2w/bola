@@ -7,6 +7,13 @@ export type FieldState = 'DEFENDING' | 'ATTACKING' | 'BALL_HOLDER';
 
 interface AICfg {
   SHOOT_RANGE_PX: number;
+  /**
+   * Anti-jitter hysteresis: how long a ball holder keeps the dribble intent
+   * after a transient possession-null window (PossessionSystem drops the
+   * holder a few frames after CONTROL_RADIUS is exceeded while the ball
+   * stays behind). Matches BALANCE_CONFIG.AI.BALL_HOLDER_GRACE_MS.
+   */
+  BALL_HOLDER_GRACE_MS: number;
 }
 
 const PHYSICS = BALANCE_CONFIG.PHYSICS;
@@ -23,15 +30,30 @@ const PHYSICS = BALANCE_CONFIG.PHYSICS;
 export class FootballAI {
   public state: FieldState = 'DEFENDING';
 
+  /** Hysteresis deadline: until nowMs passes it, a lost-ball window keeps BALL_HOLDER. */
+  private holderGraceUntilMs = -Infinity;
+
   constructor(
     public readonly rng: Rng,
     private readonly cfg: AICfg = BALANCE_CONFIG.AI,
   ) {}
 
   public tick(snap: EntitySnapshot, ctx: MatchContext): AICommand {
-    // State transitions (deterministic, snapshot-driven)
+    // State transitions (deterministic, snapshot-driven).
     if (ctx.possessorId === snap.id) {
       this.state = 'BALL_HOLDER';
+      if (ctx.nowMs !== undefined) {
+        this.holderGraceUntilMs = ctx.nowMs + this.cfg.BALL_HOLDER_GRACE_MS;
+      }
+    } else if (
+      this.state === 'BALL_HOLDER' &&
+      ctx.possessorId === null &&
+      ctx.nowMs !== undefined &&
+      ctx.nowMs < this.holderGraceUntilMs
+    ) {
+      // Anti-jitter grace: the ball is loose only because the dribbler stepped
+      // past CONTROL_RADIUS for a few frames — keep the dribble target instead
+      // of flipping BALL_HOLDER -> PRESS/anchor every coordinator tick.
     } else if (ctx.myTeamPossession) {
       this.state = 'ATTACKING';
     } else {
