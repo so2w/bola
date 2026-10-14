@@ -96,6 +96,12 @@ export const BALANCE_CONFIG = {
     EMPTY_CONE_FALLBACK: 'none' as const,
     PASS_POWER_PCT: 0.4,
   },
+  // Playtest round 3 (controls discoverability): static controls hint shown
+  // during KICKOFF and the first seconds of PLAYING.
+  UI: {
+    CONTROLS_HINT_MS: 15000,
+    CONTROLS_HINT_TEXT: 'Flechas moverse · J pase · K tiro (mantener p/ cargar)',
+  },
   // Fase 4 GOLPE LEGIBLE (3.2): charge power meter HUD geometry/colors.
   POWER_METER: {
     WIDTH_PX: 120,

@@ -11,6 +11,7 @@ import { TeamCoordinator } from '../ai/TeamCoordinator';
 import { AudioDirector } from '../audio/AudioDirector';
 import { PowerMeterHud } from '../ui/PowerMeterHud';
 import { pinHudObject, zoomForFormation } from '../ui/hudPin';
+import { shouldShowControlsHint } from '../ui/controlsHint';
 import { BALANCE_CONFIG } from '../data/balance';
 import { buildFrameMap } from '../entities/frameMap';
 import { GoalFeedback } from '../match/GoalFeedback';
@@ -78,6 +79,10 @@ export class MatchScene extends Phaser.Scene {
   /** Playtest round 2: scene clock + last PLAYING-resume timestamp (kickoff grace). */
   private currentTimeMs = 0;
   private playResumedAtMs: number | null = null;
+  /** Playtest round 3: first PLAYING transition (controls-hint window). */
+  private firstPlayStartedAtMs: number | null = null;
+  /** Playtest round 3: bottom-center controls hint (KICKOFF + first 15s). */
+  private controlsHintText!: Phaser.GameObjects.Text;
   /** Playtest round 3: physical ball interception (no ball-through-player). */
   private ballCapture?: BallCaptureSystem;
   /** Ball position at the end of the previous frame (interception segment). */
@@ -358,6 +363,15 @@ export class MatchScene extends Phaser.Scene {
     // (created last so it never shifts existing container creation order).
     this.powerMeter = new PowerMeterHud(this);
 
+    // Playtest round 3 (controls discoverability): static bottom-center hint.
+    this.controlsHintText = this.add.text(480, 516, BALANCE_CONFIG.UI.CONTROLS_HINT_TEXT, {
+      fontFamily: 'monospace',
+      fontSize: '14px',
+      color: '#ffffff',
+      backgroundColor: 'rgba(0,0,0,0.5)',
+      padding: { left: 8, right: 8, top: 3, bottom: 3 },
+    }).setOrigin(0.5, 1).setDepth(10);
+
     // HUD anti-zoom (playtest fix): at zoom 1.3-1.6 the old world-space HUD
     // text was pushed/clipped at screen edges. Everything HUD is pinned to
     // fixed screen slots, independent of camera scroll and zoom.
@@ -368,6 +382,7 @@ export class MatchScene extends Phaser.Scene {
     pinHudObject(this.cancelButton, 936, 24, this.cameraZoom, vw, vh);
     pinHudObject(this.gameOverGroup, 480, 270, this.cameraZoom, vw, vh);
     pinHudObject(this.resultOverlayGroup, 480, 270, this.cameraZoom, vw, vh);
+    pinHudObject(this.controlsHintText, 480, 516, this.cameraZoom, vw, vh);
     this.powerMeter.pinToScreen(this.cameraZoom, vw, vh);
   }
 
@@ -381,6 +396,9 @@ export class MatchScene extends Phaser.Scene {
       // (kickoff and restart resumes) so own-half kicks in the window fizzle.
       if (!wasPlaying && this.manager.state === 'PLAYING') {
         this.playResumedAtMs = time;
+        if (this.firstPlayStartedAtMs === null) {
+          this.firstPlayStartedAtMs = time;
+        }
       }
       // PRES-2: state-transition audio (whistle at kick-in, goal sting on goal)
       if (this.prevMatchState === 'KICKOFF' && this.manager.state === 'PLAYING') {
@@ -579,6 +597,10 @@ export class MatchScene extends Phaser.Scene {
       const mmss = `${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
       this.clockText.setText(mmss);
       this.scoreText.setText(`${this.manager.score.home} - ${this.manager.score.away}`);
+      // Playtest round 3: controls hint visible at KICKOFF + first seconds.
+      this.controlsHintText?.setVisible(
+        shouldShowControlsHint(this.manager.state, this.firstPlayStartedAtMs, time),
+      );
     }
 
     // Game Over overlay visibility and score sync
