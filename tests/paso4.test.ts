@@ -28,6 +28,7 @@ vi.mock('phaser', () => {
       'setPadding',
       'setScrollFactor',
       'setFillStyle',
+      'setPosition',
     ]) {
       o[m] = vi.fn(function (this: any, v?: unknown) {
         if (m === 'setVisible') {
@@ -55,7 +56,7 @@ vi.mock('phaser', () => {
             world: { setBounds: vi.fn(), enable: vi.fn() },
             add: { overlap: vi.fn() },
           };
-          this.cameras = { main: { shake: vi.fn() } };
+          this.cameras = { main: { shake: vi.fn(), width: 960, height: 540 } };
           this.input = { keyboard: { on: vi.fn() } };
           this.tweens = { add: vi.fn() };
         }

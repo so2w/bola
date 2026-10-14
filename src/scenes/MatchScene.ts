@@ -10,6 +10,7 @@ import { AIController } from '../input/AIController';
 import { TeamCoordinator } from '../ai/TeamCoordinator';
 import { AudioDirector } from '../audio/AudioDirector';
 import { PowerMeterHud } from '../ui/PowerMeterHud';
+import { pinHudObject, zoomForFormation } from '../ui/hudPin';
 import { BALANCE_CONFIG } from '../data/balance';
 import { buildFrameMap } from '../entities/frameMap';
 import { GoalFeedback } from '../match/GoalFeedback';
@@ -41,6 +42,8 @@ export class MatchScene extends Phaser.Scene {
   private humanPlayerId: string | null = null;
   private manager?: MatchManager;
   private cameraController?: CameraController;
+  /** Active per-formation camera zoom (HUD pinning uses the same value). */
+  private cameraZoom = 1;
   private selectionSystem?: PlayerSelectionSystem;
   private possession?: PossessionSystem;
   private coordinatorHome?: TeamCoordinator;
@@ -156,9 +159,12 @@ export class MatchScene extends Phaser.Scene {
     this.manager = new MatchManager();
     this.manager.bind(this, this.ball, this.homeTeam, this.awayTeam, this.formations);
     // PRES-1: config-driven camera (zoom fixed at create, clamp to pitch bounds).
+    // Playtest fix: zoom is per-formation (3v3 plays closer than 11v11) so the
+    // pitch never fills the whole viewport and characters stay readable.
     const camCfg = BALANCE_CONFIG.CAMERA;
+    this.cameraZoom = zoomForFormation(this.formations.home);
     this.cameraController = new CameraController(this.cameras.main, camCfg.LERP, camCfg.LOOK_AHEAD, {
-      zoom: camCfg.ZOOM_11V11,
+      zoom: this.cameraZoom,
       playerWeight: camCfg.PLAYER_WEIGHT,
       ballWeight: camCfg.BALL_WEIGHT,
       clampMargin: camCfg.CLAMP_MARGIN,
@@ -239,21 +245,22 @@ export class MatchScene extends Phaser.Scene {
       }
     }, undefined, this);
 
-    // HUD
-    this.clockText = this.add.text(20, 20, '03:00', {
+    // HUD — pinned to the screen (scroll+zoom independent) at safe-margin slots:
+    // clock top-left (24,24), score top-center, Cancel top-right (936,24).
+    this.clockText = this.add.text(24, 24, '03:00', {
       fontFamily: 'monospace',
       fontSize: '24px',
       color: '#ffffff',
     }).setDepth(10);
 
-    this.scoreText = this.add.text(480, 20, '0 - 0', {
+    this.scoreText = this.add.text(480, 24, '0 - 0', {
       fontFamily: 'monospace',
       fontSize: '24px',
       color: '#ffffff',
     }).setOrigin(0.5, 0).setDepth(10);
 
     // Cancel button to show result overlay
-    this.cancelButton = this.add.text(900, 20, 'Cancel', {
+    this.cancelButton = this.add.text(936, 24, 'Cancel', {
       fontFamily: 'monospace',
       fontSize: '18px',
       color: '#ffffff',
@@ -339,6 +346,18 @@ export class MatchScene extends Phaser.Scene {
     // PM-1: meter visible only while the controlled player is charging
     // (created last so it never shifts existing container creation order).
     this.powerMeter = new PowerMeterHud(this);
+
+    // HUD anti-zoom (playtest fix): at zoom 1.3-1.6 the old world-space HUD
+    // text was pushed/clipped at screen edges. Everything HUD is pinned to
+    // fixed screen slots, independent of camera scroll and zoom.
+    const vw = this.cameras.main.width;
+    const vh = this.cameras.main.height;
+    pinHudObject(this.clockText, 24, 24, this.cameraZoom, vw, vh);
+    pinHudObject(this.scoreText, 480, 24, this.cameraZoom, vw, vh);
+    pinHudObject(this.cancelButton, 936, 24, this.cameraZoom, vw, vh);
+    pinHudObject(this.gameOverGroup, 480, 270, this.cameraZoom, vw, vh);
+    pinHudObject(this.resultOverlayGroup, 480, 270, this.cameraZoom, vw, vh);
+    this.powerMeter.pinToScreen(this.cameraZoom, vw, vh);
   }
 
   update(time: number, delta: number): void {
