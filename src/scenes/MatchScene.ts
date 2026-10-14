@@ -15,7 +15,7 @@ import { BALANCE_CONFIG } from '../data/balance';
 import { buildFrameMap } from '../entities/frameMap';
 import { GoalFeedback } from '../match/GoalFeedback';
 import { anchorCoords, resolveFormation, type FormationId } from '../data/formations';
-import { canApplyKick, gateKickCommand } from '../match/kickGate';
+import { aimsIntoOwnHalf, canApplyKick, gateKickCommand, isKickoffGraceActive, kickHasBall } from '../match/kickGate';
 import { resolveMatchFormations, type MatchSceneInitData } from '../match/resolveFormations';
 import type { AICommand, BallSnapshot, EntitySnapshot } from '../ai/commands';
 
@@ -73,6 +73,9 @@ export class MatchScene extends Phaser.Scene {
   private goalFeedback = new GoalFeedback();
   /** MF-2: net flash overlays for each goal side, hidden at rest. */
   private netFlash: { home: Phaser.GameObjects.Rectangle; away: Phaser.GameObjects.Rectangle } | null = null;
+  /** Playtest round 2: scene clock + last PLAYING-resume timestamp (kickoff grace). */
+  private currentTimeMs = 0;
+  private playResumedAtMs: number | null = null;
 
   constructor() {
     super('MatchScene');
@@ -361,9 +364,16 @@ export class MatchScene extends Phaser.Scene {
   }
 
   update(time: number, delta: number): void {
+    this.currentTimeMs = time;
     // Manager update first
     if (this.manager) {
+      const wasPlaying = this.manager.state === 'PLAYING';
       this.manager.update(delta);
+      // Kickoff grace bookkeeping: remember every transition into PLAYING
+      // (kickoff and restart resumes) so own-half kicks in the window fizzle.
+      if (!wasPlaying && this.manager.state === 'PLAYING') {
+        this.playResumedAtMs = time;
+      }
       // PRES-2: state-transition audio (whistle at kick-in, goal sting on goal)
       if (this.prevMatchState === 'KICKOFF' && this.manager.state === 'PLAYING') {
         this.audio?.playEvent('WHISTLE');
@@ -503,6 +513,15 @@ export class MatchScene extends Phaser.Scene {
         controlled.updateAnimation(delta);
       }
     }
+    // Kit regression fix (playtest round 2): EVERY player animates, not only
+    // the controlled one. Previously non-controlled players never received
+    // updateAnimation(), so every AI/away sprite froze on the sheet creation
+    // frame (index 0 = home-idle red) — both teams looked identical.
+    for (const p of [...this.homeTeam, ...this.awayTeam]) {
+      if (p !== controlled) {
+        p.updateAnimation(delta);
+      }
+    }
     this.ball.preUpdate(time, delta);
 
     // PM-1: HUD reflects the controlled player's charge state.
@@ -612,6 +631,17 @@ export class MatchScene extends Phaser.Scene {
     if (cmd.action !== 'SHOOT' && cmd.action !== 'PASS' && cmd.action !== 'DISTRIBUTE') {
       return;
     }
+    // Kickoff grace (playtest round 2): an AI SHOOT aimed at the AI's own half
+    // during the grace window after a resume is downgraded to a HOLD (no kick).
+    const meta = this.playerMeta.get(p);
+    const attackDir: 1 | -1 = meta?.team === 'away' ? -1 : 1;
+    if (
+      cmd.action === 'SHOOT' &&
+      isKickoffGraceActive(this.playResumedAtMs, this.currentTimeMs) &&
+      aimsIntoOwnHalf(attackDir, cmd.targetX - p.sprite.x)
+    ) {
+      return;
+    }
     const facingVec = gateKickCommand(
       this.manager?.state,
       cmd,
@@ -654,8 +684,27 @@ export class MatchScene extends Phaser.Scene {
       if (!canApplyKick(this.manager?.state)) {
         return;
       }
-      // RULE-1: the kicker touched the ball before it flew.
+      // Defense in depth: HumanInputController already gates by pickup radius
+      // (MC-2), but any path that reaches this callback without adjacency must
+      // not be able to move the ball (same rule gateKickCommand applies to AI).
+      if (!kickHasBall(p.sprite.x, p.sprite.y, this.ball.sprite.x, this.ball.sprite.y)) {
+        return;
+      }
       const meta = this.playerMeta.get(p);
+      const attackDir: 1 | -1 = meta?.team === 'away' ? -1 : 1;
+      // Kickoff grace (playtest round 2 "apenas hago el saque me hacen gol"):
+      // the kickoff walk-up faces the kicker's OWN goal; a charged release in
+      // the grace window with an own-half facing is suppressed (HOLD) instead
+      // of firing a 600px/s own goal that no defender can reach.
+      const kindEvent = this.pendingShotKind.get(p) ?? cbKind ?? 'KICK';
+      if (
+        kindEvent === 'KICK' &&
+        isKickoffGraceActive(this.playResumedAtMs, this.currentTimeMs) &&
+        aimsIntoOwnHalf(attackDir, facing.x)
+      ) {
+        return;
+      }
+      // RULE-1: the kicker touched the ball before it flew.
       if (meta) {
         this.manager?.touchTracker.recordTouch(meta.team, meta.id, p.sprite.x, p.sprite.y);
       }
@@ -664,9 +713,8 @@ export class MatchScene extends Phaser.Scene {
       this.goalFeedback.onKick();
       this.ball.applyKick(facing, power);
       // PRES-2 + MC-1: PASS vs KICK hint (AI map or human contextual pass).
-      const kind = this.pendingShotKind.get(p) ?? cbKind ?? 'KICK';
       this.pendingShotKind.delete(p);
-      this.audio?.playEvent(kind);
+      this.audio?.playEvent(kindEvent);
       if (power > 0.6) {
         const magnitude = Phaser.Math.Clamp(power * 0.02, 0.008, 0.02);
         this.cameras.main.shake(100, magnitude);

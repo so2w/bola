@@ -50,14 +50,19 @@ export class Player {
       run: `player_run_${this.team}`,
       kick: `player_kick_${this.team}`,
     };
-    this.sprite = scene.add.sprite(x, y, 'players', 0);
+    // Kit regression fix (playtest round 2): the sprite is born on the TEAM's
+    // idle frame, not frame 0 — frame 0 is always home-idle (red), so any away
+    // frame-0 fallback window (e.g. a missed updateAnimation) showed the wrong
+    // kit even before animations ran.
+    const resolved = resolveClipFrames(this.frames ?? new Map(), this.team);
+    this.sprite = scene.add.sprite(x, y, 'players', resolved.idle[0]);
     const physics = scene.physics;
     physics.add.existing(this.sprite);
     this.body = this.sprite.body as Phaser.Physics.Arcade.Body;
     this.body.setCollideWorldBounds(true);
     this.body.setDrag(BALANCE_CONFIG.PHYSICS.PLAYER_DRAG);
 
-    this.createAnimations();
+    this.createAnimations(resolved);
   }
 
   /** Attaches exactly one controller. Replaces any previous one. */
@@ -79,8 +84,7 @@ export class Player {
    * PA-1: animations resolve frame indices through the manifest registry;
    * away clip missing -> home frames + team tint fallback (PA-1-S3).
    */
-  private createAnimations(): void {
-    const resolved = resolveClipFrames(this.frames ?? new Map(), this.team);
+  private createAnimations(resolved = resolveClipFrames(this.frames ?? new Map(), this.team)): void {
     const defs: Array<[string, number[], number, number | undefined]> = [
       [this.animKeys.idle, resolved.idle, 1, undefined],
       [this.animKeys.run, resolved.run, 8, -1],
