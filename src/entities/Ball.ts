@@ -11,7 +11,7 @@ export class Ball {
 
   constructor(scene: Phaser.Scene, x: number, y: number) {
     this.scene = scene;
-    this.shadowSprite = scene.add.image(x, y + 8, 'ballShadow');
+    this.shadowSprite = scene.add.image(x, y + 4, 'ballShadow');
     this.sprite = scene.add.sprite(x, y, 'ball');
     const physics = scene.physics;
     physics.add.existing(this.sprite);
@@ -34,7 +34,7 @@ export class Ball {
     // Sync shadow scale/alpha to Z
     if (this.shadowSprite) {
       this.shadowSprite.x = this.sprite.x;
-      this.shadowSprite.y = this.sprite.y + 8;
+      this.shadowSprite.y = this.sprite.y + 4;
       const norm = Phaser.Math.Clamp(this.z / this.maxZ, 0, 1);
       const scale = 1 - norm * 0.6;
       const alpha = 0.6 - norm * 0.5;

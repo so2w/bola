@@ -39,6 +39,11 @@ describe('procedural asset pipeline — smoke', () => {
     expect(ihdr).toMatchObject({ width: 960, height: 540, bitDepth: 8, colorType: 6 });
   });
 
+  it('ball is 16x16 with a 16x8 shadow (playtest: 32px ball dwarfed players)', () => {
+    expect(parseIhdr('ball.png')).toMatchObject({ width: 16, height: 16, bitDepth: 8, colorType: 6 });
+    expect(parseIhdr('ball-shadow.png')).toMatchObject({ width: 16, height: 8, bitDepth: 8, colorType: 6 });
+  });
+
   it('players.png dimensions are whole 32px frames (96x64)', () => {
     const ihdr = parseIhdr('players.png');
     expect(ihdr.width % 32).toBe(0);
