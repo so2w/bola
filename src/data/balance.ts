@@ -9,6 +9,10 @@ export const BALANCE_CONFIG = {
     // Playtest round 2: after any transition into PLAYING, kicks aimed at the
     // kicker's own half are suppressed for this window (kickoff own-goal guard).
     KICKOFF_GRACE_MS: 800,
+    // Playtest round 3: during the grace window a charged KICK power is capped
+    // so a kickoff blast can never be an unstoppable 600px/s free-goal; the
+    // capped flight is interceptable by field players and the GK.
+    KICKOFF_GRACE_SHOT_CAP: 0.5,
   },
   PHYSICS: {
     PITCH_WIDTH: 960,
@@ -35,6 +39,13 @@ export const BALANCE_CONFIG = {
     // only swap when the challenger is closer by more than this margin.
     BALL_HOLDER_GRACE_MS: 600,
     PRESS_SWITCH_MARGIN_PX: 30,
+    // Playtest round 3 (ball must never travel through players): sticky-trap
+    // interception tuning used by BallCaptureSystem. A field player traps the
+    // ball when its path crosses their body AND it arrives slower than
+    // TRAP_MAX_SPEED_PX_S; the GK claims at any speed within CLAIM_RADIUS.
+    // Balls above INTERCEPT_MAX_Z fly over heads and are never trapped.
+    TRAP_MAX_SPEED_PX_S: 340,
+    INTERCEPT_MAX_Z: 12,
   },
   SELECTION: {
     W1: 1.0,

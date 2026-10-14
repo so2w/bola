@@ -66,9 +66,19 @@ export class PossessionSystem {
     return this.possessorId;
   }
 
+
+
   /** Clears possession without capture rules (external reset). */
   public clear(): void {
     this.possessorId = null;
+  }
+
+  /**
+   * Assigns possession directly (BallCaptureSystem physical interception).
+   * The next update() validates the holder is still within control radius.
+   */
+  public setPossessor(id: string): void {
+    this.possessorId = id;
   }
 
   /** Called when the possessor shoots or passes: possession clears until a legal capture. */

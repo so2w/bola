@@ -82,3 +82,19 @@ export function isKickoffGraceActive(
 export function aimsIntoOwnHalf(attackDir: 1 | -1, dirX: number): boolean {
   return dirX * attackDir < 0;
 }
+
+/**
+ * Playtest round 3 (kickoff free-goal): during the grace window a KICK's
+ * charge is capped at MATCH.KICKOFF_GRACE_SHOT_CAP so a kickoff blast is
+ * always interceptable; after the window power is untouched.
+ */
+export function applyKickoffGracePowerCap(
+  power: number,
+  playResumedAtMs: number | null | undefined,
+  nowMs: number,
+): number {
+  if (!isKickoffGraceActive(playResumedAtMs, nowMs)) {
+    return power;
+  }
+  return Math.min(power, BALANCE_CONFIG.MATCH.KICKOFF_GRACE_SHOT_CAP);
+}

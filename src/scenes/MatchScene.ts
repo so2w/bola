@@ -15,7 +15,8 @@ import { BALANCE_CONFIG } from '../data/balance';
 import { buildFrameMap } from '../entities/frameMap';
 import { GoalFeedback } from '../match/GoalFeedback';
 import { anchorCoords, resolveFormation, type FormationId } from '../data/formations';
-import { aimsIntoOwnHalf, canApplyKick, gateKickCommand, isKickoffGraceActive, kickHasBall } from '../match/kickGate';
+import { aimsIntoOwnHalf, applyKickoffGracePowerCap, canApplyKick, gateKickCommand, isKickoffGraceActive, kickHasBall } from '../match/kickGate';
+import { BallCaptureSystem } from '../match/BallCaptureSystem';
 import { resolveMatchFormations, type MatchSceneInitData } from '../match/resolveFormations';
 import type { AICommand, BallSnapshot, EntitySnapshot } from '../ai/commands';
 
@@ -69,6 +70,7 @@ export class MatchScene extends Phaser.Scene {
   private prevMatchState?: string;
   /** PRES-2: PASS vs KICK hint set by handleAIKick, consumed by wireShots. */
   private pendingShotKind = new Map<Player, 'KICK' | 'PASS'>();
+
   /** MF-1/MF-2: goal-mouth feedback guards (POST once per shot, cheer once per goal). */
   private goalFeedback = new GoalFeedback();
   /** MF-2: net flash overlays for each goal side, hidden at rest. */
@@ -76,6 +78,11 @@ export class MatchScene extends Phaser.Scene {
   /** Playtest round 2: scene clock + last PLAYING-resume timestamp (kickoff grace). */
   private currentTimeMs = 0;
   private playResumedAtMs: number | null = null;
+  /** Playtest round 3: physical ball interception (no ball-through-player). */
+  private ballCapture?: BallCaptureSystem;
+  /** Ball position at the end of the previous frame (interception segment). */
+  private prevBallX = 480;
+  private prevBallY = 270;
 
   constructor() {
     super('MatchScene');
@@ -181,6 +188,7 @@ export class MatchScene extends Phaser.Scene {
     }, { debug: true });
     this.selectionSystem = new PlayerSelectionSystem();
     this.possession = new PossessionSystem();
+    this.ballCapture = new BallCaptureSystem();
     this.coordinatorHome = new TeamCoordinator('home', resolveFormation(this.formations.home));
     this.coordinatorAway = new TeamCoordinator('away', resolveFormation(this.formations.away));
 
@@ -430,6 +438,30 @@ export class MatchScene extends Phaser.Scene {
         this.lastTouchPossessorId = null;
       }
 
+      // Playtest round 3: physical interception. The ball may never cross a
+      // player's body without an event — a body on the flight path traps the
+      // ball (field players: slow balls only; GK: any speed in claim radius).
+      // Runs BEFORE command application so a trapped ball never reaches a
+      // goal zone in the same frame.
+      if (
+        this.ballCapture &&
+        this.manager?.state === 'PLAYING' &&
+        this.possession.possessorId === null
+      ) {
+        const ev = this.ballCapture.evaluate(
+          [...homeSnaps, ...awaySnaps],
+          { x: this.prevBallX, y: this.prevBallY, z: ballSnap.z, vx: ballSnap.vx, vy: ballSnap.vy },
+          ballSnap,
+        );
+        if (ev) {
+          this.ball.body.setVelocity(0, 0);
+          this.ball.zTarget = 0;
+          this.possession.setPossessor(ev.playerId);
+        }
+      }
+      this.prevBallX = this.ball.sprite.x;
+      this.prevBallY = this.ball.sprite.y;
+
       const homeCmds = this.coordinatorHome.update(time, homeSnaps, ballSnap, this.possession);
       const awayCmds = this.coordinatorAway.update(time, awaySnaps, ballSnap, this.possession);
 
@@ -651,8 +683,8 @@ export class MatchScene extends Phaser.Scene {
     if (!facingVec) {
       return;
     }
-    // PRES-2: tag the shot kind so the shot sound is PASS vs KICK by command.
-    this.pendingShotKind.set(p, cmd.action === 'PASS' ? 'PASS' : 'KICK');
+      // PRES-2: tag the shot kind so the shot sound is PASS vs KICK by command.
+      this.pendingShotKind.set(p, cmd.action === 'PASS' ? 'PASS' : 'KICK');
     p.shootWithPower(cmd.power ?? 0.3, new Phaser.Math.Vector2(facingVec.x, facingVec.y));
   }
 
@@ -711,12 +743,19 @@ export class MatchScene extends Phaser.Scene {
       this.possession?.onKick();
       // MF-1: a new kick re-arms the once-per-shot POST guard.
       this.goalFeedback.onKick();
-      this.ball.applyKick(facing, power);
+      // Playtest round 3 kickoff free-goal fix: during the grace window any
+      // KICK is capped so the flight is always interceptable by field traps
+      // or the GK — a single kickoff kick can no longer be an unstoppable goal.
+      const effectivePower =
+        kindEvent === 'KICK'
+          ? applyKickoffGracePowerCap(power, this.playResumedAtMs, this.currentTimeMs)
+          : power;
+      this.ball.applyKick(facing, effectivePower);
       // PRES-2 + MC-1: PASS vs KICK hint (AI map or human contextual pass).
       this.pendingShotKind.delete(p);
       this.audio?.playEvent(kindEvent);
-      if (power > 0.6) {
-        const magnitude = Phaser.Math.Clamp(power * 0.02, 0.008, 0.02);
+      if (effectivePower > 0.6) {
+        const magnitude = Phaser.Math.Clamp(effectivePower * 0.02, 0.008, 0.02);
         this.cameras.main.shake(100, magnitude);
       }
     });

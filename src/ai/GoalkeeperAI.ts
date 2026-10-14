@@ -56,7 +56,9 @@ export class GoalkeeperAI {
             this.state = 'RECOVER';
           }
         }
-        return { targetX: gk.x, targetY: gk.y, action: 'DIVE' };
+        // Playtest round 3: the dive must actually move the keeper's body
+        // toward the ball — diving in place let straight shots fly through.
+        return { targetX: ctx.ball.x, targetY: ctx.ball.y, action: 'DIVE' };
       }
 
       case 'HOLD': {
@@ -96,15 +98,19 @@ export class GoalkeeperAI {
         break;
     }
 
-    // Fast ball inside dive radius → DIVE (checked before CLAIM: dive radius covers claim area)
-    if (dist < this.cfg.DIVE_RADIUS_PX && Math.abs(ctx.ball.vx) > this.cfg.DIVE_TRIGGER_SPEED) {
+    // Fast ball inside dive radius → DIVE toward the ball (both axes of
+    // approach count, not only the horizontal component). Playtest round 3:
+    // dive target is the BALL, not the keeper's feet — a stationary dive
+    // never intersects a 600px/s shot.
+    if (dist < this.cfg.DIVE_RADIUS_PX && ballSpeed > this.cfg.DIVE_TRIGGER_SPEED) {
       this.state = 'DIVE';
       this.diveTimer = this.cfg.DIVE_DURATION_MS;
-      return { targetX: gk.x, targetY: gk.y, action: 'DIVE' };
+      return { targetX: ctx.ball.x, targetY: ctx.ball.y, action: 'DIVE' };
     }
 
-    // Slow/stationary ball inside claim radius → CLAIM
-    if (dist < this.cfg.CLAIM_RADIUS_PX && ballSpeed <= this.cfg.DIVE_TRIGGER_SPEED) {
+    // Ball inside claim radius → CLAIM (fast or slow: the keeper covers the
+    // goal mouth; BallCaptureSystem credits the physical claim).
+    if (dist < this.cfg.CLAIM_RADIUS_PX) {
       if (dist < 10) {
         // Ball secured
         this.state = 'HOLD';
