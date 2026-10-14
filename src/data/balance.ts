@@ -46,6 +46,14 @@ export const BALANCE_CONFIG = {
     // Balls above INTERCEPT_MAX_Z fly over heads and are never trapped.
     TRAP_MAX_SPEED_PX_S: 340,
     INTERCEPT_MAX_Z: 12,
+    // Playtest round 3 (locomotion smoothing): arrival damping radius —
+    // speed scales linearly inside it down to ARRIVAL_MIN_SPEED_PCT; and a
+    // small deterministic idle-wander orbit so at-anchor players never
+    // freeze in place (kills the "straight line robot" feel).
+    ARRIVAL_RADIUS_PX: 28,
+    ARRIVAL_MIN_SPEED_PCT: 0.25,
+    IDLE_WANDER_RADIUS_PX: 6,
+    IDLE_WANDER_SPEED: 0.002,
   },
   SELECTION: {
     W1: 1.0,
