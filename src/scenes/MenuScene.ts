@@ -129,8 +129,13 @@ export class MenuScene extends Phaser.Scene {
     for (const [i, text] of this.rowTexts.entries()) {
       const row = this.model.rows[i];
       const selected = i === this.model.cursor;
+      const settingIdx = this.settingIndexOf(row.id);
       const value =
-        row.id === 'play' ? '' : row.optionLabels[this.settingIndexOf(row.id)] ?? '';
+        row.id === 'play'
+          ? ''
+          : settingIdx >= 0
+          ? row.optionLabels[this.model.values[settingIdx]] ?? ''
+          : '';
       const base = value.length > 0 ? `${row.label}: ${value}` : row.label;
       text.setText(selected ? `${cfg.CURSOR_PREFIX}${base}` : base);
       if (row.id !== 'play') {
