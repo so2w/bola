@@ -67,6 +67,8 @@ function makeScene() {
   const mkCoord = () => ({
     update: vi.fn(() => new Map()),
     tickGK: vi.fn(() => ({ targetX: 57.6, targetY: 270, action: 'MOVE' })),
+    // Phase 4 Batch B: the scene reads the live keeper state for the GK clip.
+    gkState: vi.fn(() => 'POSITION'),
   });
   scene.coordinatorHome = mkCoord();
   scene.coordinatorAway = mkCoord();

@@ -34,6 +34,16 @@ export class PlayerSelectionSystem {
   private switchCooldownMs = 0;
   private readonly minCooldown: number;
   private readonly cfg: SelectionConfig;
+  /**
+   * Phase 4 Batch A (section 30): top-3 candidate slots, preallocated and
+   * reused every frame (no per-frame allocation in the hot path). Only
+   * getTopCandidates() allocates, and only at debug cadence.
+   */
+  private readonly topSlots: Array<{ id: string; score: number }> = [
+    { id: '', score: Number.NEGATIVE_INFINITY },
+    { id: '', score: Number.NEGATIVE_INFINITY },
+    { id: '', score: Number.NEGATIVE_INFINITY },
+  ];
 
   constructor(minCooldownMs: number = BALANCE_CONFIG.SELECTION.COOLDOWN_MS, cfg: SelectionConfig = BALANCE_CONFIG.SELECTION) {
     this.minCooldown = minCooldownMs;
@@ -42,6 +52,18 @@ export class PlayerSelectionSystem {
 
   public getSelectedId(): string | null {
     return this.currentSelectedId;
+  }
+
+  /**
+   * Playtest final (restart/set-piece handoff): syncs the selector with an
+   * EXTERNAL control claim (scene handoff to a restart/set-piece taker).
+   * Without this, the selector keeps its stale pick with the hysteresis
+   * bonus and re-selects it on the next PLAYING frame — stealing the taker
+   * right back (the "el jugador que saca es aleatorio" bug).
+   */
+  public forceSelect(id: string): void {
+    this.currentSelectedId = id;
+    this.switchCooldownMs = this.minCooldown;
   }
 
   public update(
@@ -56,6 +78,7 @@ export class PlayerSelectionSystem {
 
     // GK pre-filter: the keeper is never a selection candidate (§8/design)
     const eligible = candidates.filter((c) => c.role !== 'GK');
+    this.resetTopSlots();
 
     if (eligible.length === 0) {
       this.currentSelectedId = null;
@@ -96,6 +119,8 @@ export class PlayerSelectionSystem {
         score -= this.cfg.ENGAGED_PENALTY;
       }
 
+      this.trackTopScore(c.id, score);
+
       if (score > bestScore) {
         bestScore = score;
         bestId = c.id;
@@ -111,5 +136,55 @@ export class PlayerSelectionSystem {
     }
 
     return this.currentSelectedId;
+  }
+
+  /**
+   * Phase 4 Batch A (section 30): current top selection candidates, sorted by
+   * score desc. Returns a fresh copy — only call at debug cadence.
+   */
+  public getTopCandidates(
+    n: number = BALANCE_CONFIG.DEBUG.PANEL.MAX_CANDIDATES,
+  ): Array<{ id: string; score: number }> {
+    const out: Array<{ id: string; score: number }> = [];
+    for (const slot of this.topSlots) {
+      if (out.length >= Math.max(0, n) || slot.score === Number.NEGATIVE_INFINITY) {
+        break;
+      }
+      out.push({ id: slot.id, score: slot.score });
+    }
+    return out;
+  }
+
+  /** Clears the top-3 slots at the start of every scoring pass. */
+  private resetTopSlots(): void {
+    for (const slot of this.topSlots) {
+      slot.id = '';
+      slot.score = Number.NEGATIVE_INFINITY;
+    }
+  }
+
+  /** Bubbles a finished candidate score into the top-3 slots (no allocation). */
+  private trackTopScore(id: string, score: number): void {
+    if (score <= this.topSlots[2].score) {
+      return;
+    }
+    if (score > this.topSlots[1].score) {
+      if (score > this.topSlots[0].score) {
+        this.topSlots[2].id = this.topSlots[1].id;
+        this.topSlots[2].score = this.topSlots[1].score;
+        this.topSlots[1].id = this.topSlots[0].id;
+        this.topSlots[1].score = this.topSlots[0].score;
+        this.topSlots[0].id = id;
+        this.topSlots[0].score = score;
+      } else {
+        this.topSlots[2].id = this.topSlots[1].id;
+        this.topSlots[2].score = this.topSlots[1].score;
+        this.topSlots[1].id = id;
+        this.topSlots[1].score = score;
+      }
+    } else {
+      this.topSlots[2].id = id;
+      this.topSlots[2].score = score;
+    }
   }
 }

@@ -106,7 +106,7 @@ vi.mock('phaser', () => {
 
   function makeChain(x?: number, y?: number) {
     const o: any = { x: x ?? 0, y: y ?? 0, visible: true };
-    for (const m of ['setOrigin', 'setDepth', 'setInteractive', 'setVisible', 'setText', 'setScale', 'setAlpha', 'setScrollFactor', 'setPosition', 'setFillStyle', 'setPadding']) {
+    for (const m of ['setOrigin', 'setDepth', 'setInteractive', 'setVisible', 'setText', 'setScale', 'setAlpha', 'setScrollFactor', 'setPosition', 'setFillStyle', 'setPadding', 'clear', 'lineStyle', 'strokeCircle', 'fillStyle', 'fillTriangle']) {
       o[m] = vi.fn(function (this: any, v?: unknown) {
         if (m === 'setVisible') o.visible = v as boolean;
         return o;
@@ -127,6 +127,7 @@ vi.mock('phaser', () => {
             zone: vi.fn((x: number, y: number) => makeChain(x, y)),
             rectangle: vi.fn((x: number, y: number) => makeChain(x, y)),
             container: vi.fn((x: number, y: number) => makeChain(x, y)),
+            graphics: vi.fn(() => makeChain()),
             sprite: vi.fn((x: number, y: number, key?: string, frame?: number) => makeSprite(x, y, key, frame)),
           };
           this.physics = {
@@ -184,7 +185,7 @@ vi.mock('phaser', () => {
 import { MatchScene } from '../src/scenes/MatchScene';
 import { Player } from '../src/entities/Player';
 import { buildFrameMap } from '../src/entities/frameMap';
-import { anchorCoords, resolveFormation } from '../src/data/formations';
+import { kickoffAnchors } from '../src/match/restartPlacement';
 import { BALANCE_CONFIG } from '../src/data/balance';
 
 const W = BALANCE_CONFIG.PHYSICS.PITCH_WIDTH;
@@ -192,6 +193,9 @@ const H = BALANCE_CONFIG.PHYSICS.PITCH_HEIGHT;
 
 function buildScene() {
   const scene = new MatchScene();
+  // TASK 4 is an explicit 3v3 spawn sanity check; the shipped default is
+  // 11v11 (Batch B1), so small-sided scenes pass their formation explicitly.
+  scene.init({ formationHome: '3v3', formationAway: '3v3' });
   scene.create();
   return scene as any;
 }
@@ -224,6 +228,11 @@ describe('TASK 4 — 3v3 spawn sanity with real entities on pitch', () => {
 
   it('all players and the ball spawn inside the pitch bounds, ball at center', () => {
     const scene = buildScene();
+    // Batch A (INTRO): teams walk in from the off-pitch tunnel — the entrance
+    // completes (skip) onto the same inside-pitch kickoff spots as before.
+    expect(scene.manager.state).toBe('INTRO');
+    scene.manager.skipIntro();
+    expect(scene.manager.state).toBe('KICKOFF');
     for (const p of [...scene.homeTeam, ...scene.awayTeam] as Player[]) {
       expect(p.sprite.x).toBeGreaterThanOrEqual(0);
       expect(p.sprite.x).toBeLessThanOrEqual(W);
@@ -241,11 +250,11 @@ describe('TASK 4 — 3v3 spawn sanity with real entities on pitch', () => {
     }
   });
 
-  it('GOAL -> reset restores the SAME spawn coordinates (no drift, no side flip)', () => {
+  it('GOAL -> reset restores the SAME kickoff coordinates (no drift, no side flip)', () => {
     const scene = buildScene();
-    const slots = resolveFormation('3v3');
-    const spawnHome = anchorCoords(slots, 'home', W, H);
-    const spawnAway = anchorCoords(slots, 'away', W, H);
+    // Batch 5: spawn and reset both use own-half kickoffAnchors.
+    const spawnHome = kickoffAnchors('3v3', 'home');
+    const spawnAway = kickoffAnchors('3v3', 'away');
 
     const mgr = scene.manager;
     mgr.state = 'PLAYING';

@@ -7,10 +7,10 @@
  *   - ball.png        16x16    cartoon ball: cream base, bold outline, tiny
  *                              pentagon + satellites, specular highlight
  *   - ball-shadow.png 16x8     soft semi-transparent ellipse (Z-axis shadow)
- *   - players.png     96x64    spritesheet, 32x32 frames — big-head cartoon
+ *   - players.png     256x64   spritesheet, 32x32 frames — big-head cartoon
  *                              players (~45% head, bold silhouette outline)
- *                        row 0 = home [Idle, Run, Kick]
- *                        row 1 = away [Idle, Run, Kick]
+ *                        row 0 = home [Idle, Run, Kick, Tackle, Celebrate, Dive, Claim, Distribute]
+ *                        row 1 = away [same 8 clips]
  *   - manifest.json   single source of truth consumed by BootScene
  *
  * Rendering: every asset is painted at 4x supersampling and downsampled with
@@ -29,6 +29,39 @@ import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// ---------------------------------------------------------------------------
+// Part A0 — Shared goal geometry (playtest final: "porterías alineadas")
+// ---------------------------------------------------------------------------
+
+// The single source of truth for goal geometry lives in
+// src/data/goalGeometry.json — the SAME file src/data/balance.ts derives its
+// GOAL_FRAME/FEEDBACK values from. The generator reads it so the painted
+// goal lines and goal-mouth markings can never drift off the detection zones
+// and the visible goal frames (tests/goalGeometry.spec.ts locks the
+// contract).
+const GOAL_GEOMETRY = JSON.parse(
+  fs.readFileSync(path.join(__dirname, '..', 'src', 'data', 'goalGeometry.json'), 'utf8'),
+);
+
+/**
+ * Goal-mouth marking geometry the pitch painter uses (final px). Exported for
+ * the alignment test — must equal BALANCE_CONFIG.GOAL_FRAME / the detection
+ * zones at all times.
+ */
+export function goalMarkingGeometry() {
+  return {
+    leftLineX: GOAL_GEOMETRY.GOAL_LINE_LEFT_X_PX,
+    rightLineX: GOAL_GEOMETRY.GOAL_LINE_RIGHT_X_PX,
+    centerY: GOAL_GEOMETRY.GOAL_MOUTH_CENTER_Y_PX,
+    mouthTopY:
+      GOAL_GEOMETRY.GOAL_MOUTH_CENTER_Y_PX - GOAL_GEOMETRY.GOAL_MOUTH_HALF_HEIGHT_PX,
+    mouthBottomY:
+      GOAL_GEOMETRY.GOAL_MOUTH_CENTER_Y_PX + GOAL_GEOMETRY.GOAL_MOUTH_HALF_HEIGHT_PX,
+    zoneWidth: GOAL_GEOMETRY.GOAL_ZONE_WIDTH_PX,
+    zoneHeight: GOAL_GEOMETRY.GOAL_ZONE_HEIGHT_PX,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Part A — RGBA canvas + minimal PNG encoder
@@ -265,10 +298,19 @@ function encodePng(canvas) {
 const WHITE = [255, 255, 255];
 const BLACK = [0, 0, 0];
 
-const PITCH_W = 960;
-const PITCH_H = 540;
-/** Perceived margin of the playable field inside the image. */
-const FIELD = { x: 40, y: 30, w: PITCH_W - 80, h: PITCH_H - 60 };
+const PITCH_W = GOAL_GEOMETRY.PITCH_WIDTH_PX;
+const PITCH_H = GOAL_GEOMETRY.PITCH_HEIGHT_PX;
+/**
+ * Playable field inside the image. The flank borders ARE the goal lines
+ * (shared geometry) — the visible goal frames' posts stand exactly on them,
+ * and the goal-mouth marking below matches the frame mouth 1:1.
+ */
+const FIELD = {
+  x: GOAL_GEOMETRY.GOAL_LINE_LEFT_X_PX,
+  y: GOAL_GEOMETRY.FIELD_MARGIN_TOP_PX,
+  w: GOAL_GEOMETRY.GOAL_LINE_RIGHT_X_PX - GOAL_GEOMETRY.GOAL_LINE_LEFT_X_PX,
+  h: PITCH_H - GOAL_GEOMETRY.FIELD_MARGIN_TOP_PX - GOAL_GEOMETRY.FIELD_MARGIN_BOTTOM_PX,
+};
 
 function paintPitch() {
   const hi = createCanvas(PITCH_W * SS, PITCH_H * SS);
@@ -284,7 +326,7 @@ function paintPitch() {
 
   // White field markings.
   const lw = 3; // line width
-  // Outer border
+  // Outer border (flanks sit ON the shared goal lines)
   P.rect(FIELD.x, FIELD.y, FIELD.w, lw, WHITE);
   P.rect(FIELD.x, FIELD.y + FIELD.h - lw, FIELD.w, lw, WHITE);
   P.rect(FIELD.x, FIELD.y, lw, FIELD.h, WHITE);
@@ -295,26 +337,29 @@ function paintPitch() {
   P.circle(PITCH_W / 2, PITCH_H / 2, 55, lw, WHITE);
   P.disc(PITCH_W / 2, PITCH_H / 2, 4, WHITE);
 
-  // Penalty boxes + goal areas on both flanks.
+  // Penalty boxes + goal mouths on both flanks. The penalty box stays a
+  // generator-internal art shape anchored at the shared goal line; the goal
+  // MOUTH marking is painted 1:1 from the shared geometry so the visible
+  // goal frames (posts at the mouth edges) align with the pitch.
+  const marking = goalMarkingGeometry();
   const boxW = 90;
   const boxH = 220;
-  const goalW = 36;
-  const goalH = 110;
   const boxY = Math.floor((PITCH_H - boxH) / 2);
-  const goalY = Math.floor((PITCH_H - goalH) / 2);
   for (const side of ['L', 'R']) {
-    const bx = side === 'L' ? FIELD.x : FIELD.x + FIELD.w - boxW;
-    const gx = side === 'L' ? FIELD.x : FIELD.x + FIELD.w - goalW;
+    const lineX = side === 'L' ? marking.leftLineX : marking.rightLineX;
+    const inward = side === 'L' ? 1 : -1;
+    const bx = side === 'L' ? lineX : lineX - boxW;
     // penalty box (3 strokes open toward the touchline)
     P.rect(bx, boxY, boxW, lw, WHITE);
     P.rect(bx, boxY + boxH - lw, boxW, lw, WHITE);
     P.rect(side === 'L' ? bx + boxW - lw : bx, boxY, lw, boxH, WHITE);
-    // goal area
-    P.rect(gx, goalY, goalW, lw, WHITE);
-    P.rect(gx, goalY + goalH - lw, goalW, lw, WHITE);
-    P.rect(side === 'L' ? gx + goalW - lw : gx, goalY, lw, goalH, WHITE);
     // penalty spot
-    P.disc(side === 'L' ? FIELD.x + 62 : FIELD.x + FIELD.w - 62, PITCH_H / 2, 3, WHITE);
+    P.disc(side === 'L' ? lineX + 62 : lineX - 62, PITCH_H / 2, 3, WHITE);
+    // goal-mouth marking: two horizontal ticks spanning the detection-zone
+    // width around the goal line, exactly at the frame's post positions.
+    const halfZone = marking.zoneWidth / 2;
+    P.rect(lineX - halfZone, marking.mouthTopY - lw / 2, marking.zoneWidth, lw, WHITE);
+    P.rect(lineX - halfZone, marking.mouthBottomY - lw / 2, marking.zoneWidth, lw, WHITE);
   }
 
   return downsample(hi);
@@ -393,7 +438,7 @@ const PALETTES = {
   away: { shirt: '#1976d2', shorts: '#ffffff', skin: '#f1c27d' },
 };
 
-const FRAME_NAMES = ['idle', 'run', 'kick'];
+const FRAME_NAMES = ['idle', 'run', 'kick', 'tackle', 'celebrate', 'dive', 'claim', 'distribute'];
 const FRAME_W = 32;
 const FRAME_H = 32;
 
@@ -401,6 +446,9 @@ const FRAME_H = 32;
 const OUTLINE = hexRgb('#202020');
 const HAIR = hexRgb('#5a3a1f'); // darker hair cap
 const BOOT = [40, 40, 40];
+/** Claim-pose ball colors (same recipe as ball.png). */
+const BALL_INK = hexRgb('#1c1c24');
+const BALL_BASE = hexRgb('#fff8ec');
 
 /** Darken an rgb by a factor (belly shading). */
 function shade(rgb, f) {
@@ -414,6 +462,9 @@ function shade(rgb, f) {
  * torso for silhouette readability, visible legs and small dark boots, arms
  * hugging the torso, plus a tiny smile for charm.
  * All coordinates are final-frame pixels (scaled internally).
+ * Pose extras beyond the base offsets: `torsoY` lowers the torso for slide
+ * poses, `cxOff` shifts the head/torso center, `holdBall` draws the claimed
+ * ball between the hands (GK claim).
  */
 function paintPlayerFrame(P, ox, oy, palette, pose) {
   const skin = hexRgb(palette.skin);
@@ -440,9 +491,52 @@ function paintPlayerFrame(P, ox, oy, palette, pose) {
       legs: [[13.5, 25, 13.5, 28.2], [18.8, 25, 24.4, 22.2]], // follow-through
       boots: [[14, 29], 0, [26, 21.6], 1],
     },
+    // Phase 4 Batch B: slide tackle — low body leaning forward, both legs
+    // extended ahead, arms trailing behind for the slide silhouette.
+    tackle: {
+      headCy: 10.5,
+      torsoY: 23,
+      cxOff: 2,
+      arms: [[6.5, 21, 2.0], [24.5, 23, 2.0]],
+      legs: [[18, 26, 27, 24], [18, 27, 26, 28.4]],
+      boots: [[27.6, 23.6], 1, [25.4, 28.4], 0],
+    },
+    // Short arms-up celebration bounce (the clip pairs with idle for the
+    // yoyo bounce in Player): both arms raised beside the head.
+    celebrate: {
+      headCy: 8.4,
+      arms: [[5.5, 6, 2.0], [26.5, 6, 2.0]],
+      legs: [[13.4, 25, 13.4, 28.2], [18.6, 25, 18.6, 28.2]],
+      boots: [[13.9, 29], 0, [18.1, 29], 0],
+    },
+    // GK dive: lateral stretch — body low, both arms reaching to one side,
+    // legs trailing the other way.
+    dive: {
+      headCy: 11,
+      torsoY: 21,
+      arms: [[27, 12, 2.0], [26, 17, 2.0]],
+      legs: [[12, 24, 4, 21], [13, 26, 6, 26]],
+      boots: [[4.4, 20.6], 1, [6.4, 26], 0],
+    },
+    // GK claim: hands together in front of the chest holding the ball.
+    claim: {
+      headCy: 8.4,
+      holdBall: true,
+      arms: [[10, 14.5, 2.0], [22, 14.5, 2.0]],
+      legs: [[13.4, 25, 13.4, 28.2], [18.6, 25, 18.6, 28.2]],
+      boots: [[13.9, 29], 0, [18.1, 29], 0],
+    },
+    // GK distribute: kick-like side stance with one arm swung forward (throw).
+    distribute: {
+      headCy: 8.4,
+      arms: [[26, 13, 2.0], [8, 19, 2.0]],
+      legs: [[13.5, 25, 13.5, 28.2], [18.8, 25, 22, 27.5]],
+      boots: [[14, 29], 0, [21.6, 27.8], 1],
+    },
   };
   const p = poses[pose];
-  const cx = ox + 16; // figure center x
+  const cx = ox + 16 + (p.cxOff ?? 0); // figure center x
+  const torsoY = p.torsoY ?? 20.5;
   const headCy = oy + p.headCy;
 
   // 1. Legs (skin, ~2.6px wide segments) — behind the shorts band.
@@ -459,17 +553,24 @@ function paintPlayerFrame(P, ox, oy, palette, pose) {
   }
 
   // 3. Torso: bold outline ellipse, then shirt fill, then belly shading.
-  P.ellipse(cx, oy + 20.5, 9, 8, OUTLINE);
-  P.ellipse(cx, oy + 20.5, 8, 7, shirt);
-  P.ellipse(cx, oy + 24.2, 6.4, 2.4, shade(shirt, 0.78), 220);
+  P.ellipse(cx, oy + torsoY, 9, 8, OUTLINE);
+  P.ellipse(cx, oy + torsoY, 8, 7, shirt);
+  P.ellipse(cx, oy + torsoY + 3.7, 6.4, 2.4, shade(shirt, 0.78), 220);
 
   // 4. Shorts band (2-color hint kept subtle).
-  P.rect(cx - 5.5, oy + 23.5, 11, 2.6, shorts);
+  P.rect(cx - 5.5, oy + torsoY + 3, 11, 2.6, shorts);
 
   // 5. Arms: small circles hugging the torso, outlined for readability.
   for (const [ax, ay, ar] of p.arms) {
     P.disc(ox + ax, oy + ay, ar + 1, OUTLINE);
     P.disc(ox + ax, oy + ay, ar, skin);
+  }
+
+  // 5b. Claimed ball held between the hands (GK claim pose).
+  if (p.holdBall) {
+    P.disc(cx, oy + 13.8, 3.6, BALL_INK);
+    P.disc(cx, oy + 13.8, 2.7, BALL_BASE);
+    P.disc(cx, oy + 13.8, 1.0, BLACK);
   }
 
   // 6. Oversized head: outline ring, darker hair cap, skin face.
@@ -484,7 +585,7 @@ function paintPlayerFrame(P, ox, oy, palette, pose) {
 }
 
 function paintPlayers() {
-  const hi = createCanvas(FRAME_W * 3 * SS, FRAME_H * 2 * SS);
+  const hi = createCanvas(FRAME_W * FRAME_NAMES.length * SS, FRAME_H * 2 * SS);
   const P = makePainter(hi);
   const teams = ['home', 'away'];
   teams.forEach((team, row) => {
@@ -514,6 +615,7 @@ function main() {
     fs.writeFileSync(path.join(outDir, name), encodePng(canvas));
   }
 
+  const teams = ['home', 'away'];
   const manifest = {
     files: ['pitch.png', 'ball.png', 'ball-shadow.png', 'players.png'],
     images: {
@@ -525,7 +627,7 @@ function main() {
       players: {
         frameW: 32,
         frameH: 32,
-        frames: ['home-idle', 'home-run', 'home-kick', 'away-idle', 'away-run', 'away-kick'],
+        frames: teams.flatMap((team) => FRAME_NAMES.map((clip) => `${team}-${clip}`)),
       },
     },
     palettes: PALETTES,
@@ -538,4 +640,13 @@ function main() {
   console.log('  public/assets/manifest.json');
 }
 
-main();
+// Only write files when executed directly (node scripts/generate-sprites.js).
+// Importing the module — e.g. from tests/goalGeometry.spec.ts — must be free
+// of side effects.
+const isDirectRun =
+  process.argv[1] !== undefined &&
+  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+if (isDirectRun) {
+  main();
+}

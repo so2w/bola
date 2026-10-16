@@ -5,21 +5,43 @@ import { MatchManager } from '../systems/MatchManager';
 import { CameraController } from '../match/CameraController';
 import { PlayerSelectionSystem } from '../match/PlayerSelectionSystem';
 import { PossessionSystem } from '../match/PossessionSystem';
-import { HumanInputController } from '../input/HumanInputController';
+import { HumanInputController, type PassContext } from '../input/HumanInputController';
+import { TouchInput } from '../input/TouchInput';
 import { AIController } from '../input/AIController';
 import { TeamCoordinator } from '../ai/TeamCoordinator';
 import { AudioDirector } from '../audio/AudioDirector';
+import { WebAudioSynth } from '../audio/WebAudioSynth';
+import { FrameTimeTracker } from '../utils/FrameTimeTracker';
+import { detectFoul } from '../match/foulRule';
 import { PowerMeterHud } from '../ui/PowerMeterHud';
 import { pinHudObject, zoomForFormation } from '../ui/hudPin';
 import { shouldShowControlsHint } from '../ui/controlsHint';
-import { BALANCE_CONFIG } from '../data/balance';
+import { BALANCE_CONFIG, type TacticsId } from '../data/balance';
 import { buildFrameMap } from '../entities/frameMap';
+import { gkClipForState, isGkOverrideClip } from '../entities/gkAnim';
+import { pickCelebrationIds } from '../match/celebration';
+import { CrowdIntensitySampler } from '../audio/crowdIntensity';
 import { GoalFeedback } from '../match/GoalFeedback';
-import { anchorCoords, resolveFormation, type FormationId } from '../data/formations';
+import { goalFrameGeometry } from '../match/goalFrame';
+import { restartControlId, type RestartControlKind } from '../match/restartControl';
+import { FoulBanner } from '../ui/FoulBanner';
+import { resolveFormation, type FormationId } from '../data/formations';
+import { kickoffAnchors } from '../match/restartPlacement';
 import { aimsIntoOwnHalf, applyKickoffGracePowerCap, canApplyKick, gateKickCommand, isKickoffGraceActive, kickHasBall } from '../match/kickGate';
 import { BallCaptureSystem } from '../match/BallCaptureSystem';
+import { ControlledIndicatorModel, ControlledPlayerIndicator } from '../ui/ControlledIndicator';
 import { resolveMatchFormations, type MatchSceneInitData } from '../match/resolveFormations';
+import { entranceStarts } from '../match/EntranceSystem';
+import { WeatherSystem } from '../match/WeatherSystem';
+import { DebugTuning } from '../debug/DebugTuning';
+import { buildDebugPayload, formatDebugPayload } from '../debug/DebugMonitor';
+import { HalftimeBanner, halftimeBannerData } from '../ui/HalftimeBanner';
+import { FulltimeBanner } from '../ui/FulltimeBanner';
 import type { AICommand, BallSnapshot, EntitySnapshot } from '../ai/commands';
+import type { GKState } from '../ai/GoalkeeperAI';
+
+/** Midpoint divisor for center averages (arithmetic, not tuning). */
+const FRAME_MID_DIVISOR = 2;
 
 /** Frame index inside the players sheet = position in manifest.spritesheets.players.frames. */
 const HOME_RUN_FRAME = 1;
@@ -41,6 +63,8 @@ export class MatchScene extends Phaser.Scene {
   private aiControllers = new Map<string, AIController>();
   private awayControllers = new Map<string, AIController>();
   private humanController?: HumanInputController;
+  /** Touch proto controller (Batch 2): stick + A/B; widgets self-skip off touch devices. */
+  private touchInput?: TouchInput;
   private humanPlayerId: string | null = null;
   private manager?: MatchManager;
   private cameraController?: CameraController;
@@ -57,7 +81,7 @@ export class MatchScene extends Phaser.Scene {
   private gameOverGroup!: Phaser.GameObjects.Container;
   private resultOverlayGroup!: Phaser.GameObjects.Container;
   private cancelButton?: Phaser.GameObjects.Text;
-  private formations: { home: FormationId; away: FormationId } = { home: '3v3', away: '3v3' };
+  private formations: { home: FormationId; away: FormationId } = { home: '11v11', away: '11v11' };
   /** Player → (team, id) for last-touch attribution feeds (RULE-1). */
   private playerMeta = new Map<Player, { team: 'home' | 'away'; id: string }>();
   private lastTouchPossessorId: string | null = null;
@@ -89,6 +113,51 @@ export class MatchScene extends Phaser.Scene {
   /** Ball position at the end of the previous frame (interception segment). */
   private prevBallX = 480;
   private prevBallY = 270;
+  /** Batch 5 (A): ring + floating marker tracking the controlled player. */
+  private indicator?: ControlledPlayerIndicator;
+  private readonly indicatorModel = new ControlledIndicatorModel();
+  /** Batch 5 (D+E): last applied side-swap state (attack dirs + coordinators). */
+  private lastSidesSwapped = false;
+  /** Home attack direction, flipped by the halftime side swap. */
+  private homeAttackDir: 1 | -1 = 1;
+  /** Batch A (INTRO): walk-in targets per player id (kickoff anchors). */
+  private entranceTargets = new Map<string, { x: number; y: number }>();
+  /** Batch A (HALF): overlay panel with score, stats and resume/restart. */
+  private halftimeBanner?: HalftimeBanner;
+  /** Batch B1 (RESULTS): terminal full-time panel with replay to INTRO. */
+  private fulltimeBanner?: FulltimeBanner;
+  /** Batch C (foul signal): transient FALTA/PENAL banner on set-piece awards. */
+  private foulBanner?: FoulBanner;
+  /** Batch B1 (tactics): active preset + small HUD label, default Equilibrada. */
+  private tacticsId: TacticsId = BALANCE_CONFIG.TACTICS.DEFAULT;
+  private tacticsLabel?: Phaser.GameObjects.Text;
+  /** Batch B2: live set-piece (foul awarded, kick pending) + AI-kick countdown. */
+  private setPiece: { timerMs: number; taken: boolean } | null = null;
+  /**
+   * Playtest final (control handoff): while set, auto-selection is suspended
+   * and the human keeps the claimed restart/set-piece taker. Set on own-team
+   * handoffs (kickoff/throw-in/corner/goal-kick resume, home free-kick/penalty
+   * award), cleared by the FIRST applied kick of the ball (any kicker).
+   */
+  private controlHoldId: string | null = null;
+  /** Batch B2: rolling frame-time stats fed from update (AGENTS.md section 33). */
+  private readonly frameTime = new FrameTimeTracker();
+  private frameCount = 0;
+  /** Phase 4 Batch A: config-driven surface/weather modifiers (section 13). */
+  private weatherSystem?: WeatherSystem;
+  /** Phase 4 Batch A: session-only live tuning knobs (section 30, never persisted). */
+  private readonly debugTuning = new DebugTuning();
+  /** Phase 4 Batch A: debug overlay state — never visible by default. */
+  private debugVisible = false;
+  private debugText?: Phaser.GameObjects.Text;
+  private debugAccumMs = 0;
+  /** Version of the tuning values last written into entities/camera. */
+  private lastTuningVersion = -1;
+  /**
+   * Phase 4 Batch B (section 22 layer 3): dynamic crowd bed intensity —
+   * sampled at a low cadence, one gain write per sample (never per frame).
+   */
+  private readonly crowdSampler = new CrowdIntensitySampler();
 
   constructor() {
     super('MatchScene');
@@ -96,8 +165,8 @@ export class MatchScene extends Phaser.Scene {
 
   /**
    * FORM-1: formations come from scene init data (formationHome/formationAway),
-   * defaulted and validated BEFORE any entity spawns. Default is '3v3' to keep
-   * Fase 2 gameplay unchanged until a later slice flips the default to '11v11'.
+   * defaulted and validated BEFORE any entity spawns. Batch B1 ships 11v11 by
+   * default; explicit 3v3/5v5 params stay available for tests and sandbox.
    */
   init(data?: MatchSceneInitData): void {
     this.formations = resolveMatchFormations(data);
@@ -107,15 +176,22 @@ export class MatchScene extends Phaser.Scene {
     // Static pitch backdrop.
     this.add.image(480, 270, 'pitch');
 
+    // Phase 4 Batch A: surface/weather modifiers from config (section 13)
+    // plus cheap pitch visual evolution (flat rects only — section 3 budget).
+    // Surface level comes from config for now; stadium evolution is Phase 6.
+    this.weatherSystem = new WeatherSystem();
+    this.applySurfaceVisuals();
+
     // World bounds for Arcade physics
     this.physics.world.setBounds(0, 0, 960, 540);
 
     // Ball
     this.ball = new Ball(this, 480, 270);
 
-    // Teams placed at data-driven formation anchors (parametric FormationId)
-    const homeCoords = anchorCoords(resolveFormation(this.formations.home), 'home', 960, 540);
-    const awayCoords = anchorCoords(resolveFormation(this.formations.away), 'away', 960, 540);
+    // Teams placed at own-half kickoff anchors (batch 5: raw data anchors
+    // describe an attacking shape — kickoffAnchors clamps midfield leakers).
+    const homeCoords = kickoffAnchors(this.formations.home, 'home');
+    const awayCoords = kickoffAnchors(this.formations.away, 'away');
     this.roles = {
       home: homeCoords.map((a) => a.role),
       away: awayCoords.map((a) => a.role),
@@ -144,14 +220,20 @@ export class MatchScene extends Phaser.Scene {
       ...[...this.awayByIndex].map(([id, p]) => [p, { team: 'away' as const, id }] as const),
     ]);
 
-    // Controllers: every player gets an AIController with kick wiring
+    // Controllers: every player gets an AIController with kick wiring.
+    // Phase 2 closure (GK profile): keeper controllers carry isGK so locomotion
+    // uses BALANCE_CONFIG.GK speeds/accel instead of field-player speeds.
     for (const [id, p] of this.homeByIndex) {
-      const ai = new AIController((cmd) => this.handleAIKick(p, cmd));
+      const idx = Number(id.split('-')[1]);
+      const isGK = this.roles.home[idx] === 'GK';
+      const ai = new AIController((cmd) => this.handleAIKick(p, cmd), BALANCE_CONFIG.AI, undefined, isGK);
       p.attachController(ai);
       this.aiControllers.set(id, ai);
     }
     for (const [id, p] of this.awayByIndex) {
-      const ai = new AIController((cmd) => this.handleAIKick(p, cmd));
+      const idx = Number(id.split('-')[1]);
+      const isGK = this.roles.away[idx] === 'GK';
+      const ai = new AIController((cmd) => this.handleAIKick(p, cmd), BALANCE_CONFIG.AI, undefined, isGK);
       p.attachController(ai);
       this.awayControllers.set(id, ai);
     }
@@ -160,20 +242,38 @@ export class MatchScene extends Phaser.Scene {
     this.humanController = new HumanInputController();
     // MC-1/MC-2: injected match context — ball position + teammates (the
     // controlled player changes on selection swaps, so getTeammates is a closure).
-    this.humanController.setContext({
-      getBallPos: () => ({ x: this.ball.sprite.x, y: this.ball.sprite.y }),
-      getTeammates: () =>
-        this.homeTeam
-          .filter((p) => p !== this.player)
-          .map((p) => ({ x: p.sprite.x, y: p.sprite.y })),
-      attackDir: 1,
-    });
+    this.humanController.setContext(this.buildHumanContext());
     this.player = this.homeTeam[this.homeTeam.length - 1];
     this.humanPlayerId = null;
+
+    // Touch proto (Batch 2): same match context as the keyboard controller, so
+    // both resolve identical intents through the same charge/cap/kick-gate
+    // path. Widgets only materialize on touch-capable devices; otherwise
+    // update() is a no-op and the keyboard keeps full authority. No Button C.
+    this.touchInput = new TouchInput();
+    this.touchInput.setContext(this.buildHumanContext());
+    this.touchInput.attach(this, this.player);
 
     // Systems
     this.manager = new MatchManager();
     this.manager.bind(this, this.ball, this.homeTeam, this.awayTeam, this.formations);
+    // Batch A (INTRO): both teams start off-pitch and walk to kickoff spots.
+    this.beginEntrance();
+    // Batch A: any-key/tap skips the entrance (config flag enforced inside).
+    // Batch C: the same first gesture unlocks the ambient crowd bed inside
+    // the input handler path (autoplay-policy safe; headless no-op).
+    this.input.keyboard?.on('keydown', () => {
+      this.manager?.skipIntro();
+      this.audio?.startCrowdBed();
+    });
+    // Headless scene mocks stub keyboard but not input.on — optional-chain it.
+    (this.input as unknown as { on?: (ev: string, cb: () => void) => void }).on?.(
+      'pointerdown',
+      () => {
+        this.manager?.skipIntro();
+        this.audio?.startCrowdBed();
+      },
+    );
     // PRES-1: config-driven camera (zoom fixed at create, clamp to pitch bounds).
     // Playtest fix: zoom is per-formation (3v3 plays closer than 11v11) so the
     // pitch never fills the whole viewport and characters stay readable.
@@ -187,20 +287,47 @@ export class MatchScene extends Phaser.Scene {
       worldWidth: BALANCE_CONFIG.PHYSICS.PITCH_WIDTH,
       worldHeight: BALANCE_CONFIG.PHYSICS.PITCH_HEIGHT,
     });
+    // Phase 4 Batch A: surface sprint modifier (shared by BOTH teams,
+    // section 13) + live tuning applied through the single speed path
+    // (Player.maxSpeed — human move() and AI locomotion both read it).
+    // The GK keeps its own locomotion profile (GK_MAX_SPEED_PX_S) and is
+    // intentionally unaffected by the sprint modifier.
+    this.applySpeedAndPassTuning();
     // PRES-2: event-driven audio; assets are optional (skip + debug warn).
     this.audio = new AudioDirector({
       has: (key) => this.cache.audio.exists(key),
       play: (key, cfg) => this.sound.play(key, cfg),
     }, { debug: true });
+    // Batch B2: procedural synthesis fallback (original WebAudio recipes) so
+    // wired events sound with zero audio files. Asset files always win.
+    // WebAudioSynth is lazy + headless-guarded — safe to attach everywhere.
+    this.audio.setSynthAdapter(new WebAudioSynth());
     this.selectionSystem = new PlayerSelectionSystem();
     this.possession = new PossessionSystem();
     this.ballCapture = new BallCaptureSystem();
     this.coordinatorHome = new TeamCoordinator('home', resolveFormation(this.formations.home));
     this.coordinatorAway = new TeamCoordinator('away', resolveFormation(this.formations.away));
+    this.coordinatorHome.setTactics(this.tacticsId);
+    this.coordinatorAway.setTactics(this.tacticsId);
 
-    // Scoring orientation: left zone = away scores, right zone = home scores
-    this.leftGoal = this.add.zone(20, 270, 40, 140);
-    this.rightGoal = this.add.zone(940, 270, 40, 140);
+    // Scoring orientation: left zone = away scores, right zone = home scores.
+    // Playtest final (goal alignment): every zone rect comes from
+    // goalFrameGeometry() — the SAME shared geometry the visible frames and
+    // the painted pitch markings use, so detection, frame and markings can
+    // never drift apart.
+    const goalFrames = goalFrameGeometry();
+    this.leftGoal = this.add.zone(
+      goalFrames.left.zone.cx,
+      goalFrames.left.zone.cy,
+      goalFrames.left.zone.w,
+      goalFrames.left.zone.h,
+    );
+    this.rightGoal = this.add.zone(
+      goalFrames.right.zone.cx,
+      goalFrames.right.zone.cy,
+      goalFrames.right.zone.w,
+      goalFrames.right.zone.h,
+    );
     this.physics.world.enable([this.leftGoal, this.rightGoal]);
     (this.leftGoal.body as Phaser.Physics.Arcade.Body).setImmovable(true);
     (this.rightGoal.body as Phaser.Physics.Arcade.Body).setImmovable(true);
@@ -210,19 +337,12 @@ export class MatchScene extends Phaser.Scene {
     // MF-1: post bands sit just beyond the goal-mouth band (geometry from
     // BALANCE_CONFIG.FEEDBACK), one above and one below each goal zone.
     const FB = BALANCE_CONFIG.FEEDBACK;
-    const bandOffset = FB.GOAL_MOUTH_HALF_HEIGHT_PX + FB.POST_BAND_HEIGHT_PX / 2;
     const postBands: Phaser.GameObjects.Zone[] = [];
-    for (const goal of [
-      { x: 20, side: 'left' as const },
-      { x: 940, side: 'right' as const },
-    ]) {
+    for (const side of [goalFrames.left, goalFrames.right]) {
       for (const dir of [-1, 1]) {
-        const band = this.add.zone(
-          goal.x,
-          FB.GOAL_MOUTH_CENTER_Y_PX + dir * bandOffset,
-          40,
-          FB.POST_BAND_HEIGHT_PX,
-        );
+        const bandY =
+          dir === -1 ? side.mouthTopY - FB.POST_BAND_HEIGHT_PX / 2 : side.mouthBottomY + FB.POST_BAND_HEIGHT_PX / 2;
+        const band = this.add.zone(side.zone.cx, bandY, side.zone.w, FB.POST_BAND_HEIGHT_PX);
         this.physics.world.enable(band);
         (band.body as Phaser.Physics.Arcade.Body).setImmovable(true);
         band.setVisible(false);
@@ -242,25 +362,44 @@ export class MatchScene extends Phaser.Scene {
     this.netFlash = {
       // Net that flashes belongs to the conceding goal's side: a home GOAL is
       // scored in the right goal, an away GOAL in the left goal.
-      home: this.add.rectangle(940, FB.GOAL_MOUTH_CENTER_Y_PX, 40, 140, 0xffffff, 0),
-      away: this.add.rectangle(20, FB.GOAL_MOUTH_CENTER_Y_PX, 40, 140, 0xffffff, 0),
+      home: this.add.rectangle(
+        goalFrames.right.zone.cx,
+        goalFrames.right.zone.cy,
+        goalFrames.right.zone.w,
+        goalFrames.right.zone.h,
+        0xffffff,
+        0,
+      ),
+      away: this.add.rectangle(
+        goalFrames.left.zone.cx,
+        goalFrames.left.zone.cy,
+        goalFrames.left.zone.w,
+        goalFrames.left.zone.h,
+        0xffffff,
+        0,
+      ),
     };
     this.netFlash.home.setDepth(9).setVisible(false);
     this.netFlash.away.setDepth(9).setVisible(false);
 
     this.physics.add.overlap(this.ball.sprite, this.leftGoal, () => {
       if (this.manager?.state === 'PLAYING') {
-        this.lastScoringSide = 'away';
-        this.manager.handleGoal('away');
+        // Batch 5 (D+E): scoring side follows the halftime side swap.
+        this.lastScoringSide = this.manager.scorerForGoal('left');
+        this.manager.handleGoal(this.lastScoringSide);
       }
     }, undefined, this);
 
     this.physics.add.overlap(this.ball.sprite, this.rightGoal, () => {
       if (this.manager?.state === 'PLAYING') {
-        this.lastScoringSide = 'home';
-        this.manager.handleGoal('home');
+        this.lastScoringSide = this.manager.scorerForGoal('right');
+        this.manager.handleGoal(this.lastScoringSide);
       }
     }, undefined, this);
+
+    // Batch C: visible goal frames drawn EXACTLY over the detection zones
+    // above (posts on the goal-mouth edges = POST bands, cheap net outward).
+    this.drawGoalFrames();
 
     // HUD — pinned to the screen (scroll+zoom independent) at safe-margin slots:
     // clock top-left (24,24), score top-center, Cancel top-right (936,24).
@@ -347,9 +486,61 @@ export class MatchScene extends Phaser.Scene {
     this.resultOverlayGroup.setVisible(false);
     (this.resultOverlayGroup as any).scoreText = roScore;
 
-    // R key listener for restart
+    // Batch A (HALF): overlay panel — Continuar resumes the second half,
+    // Reiniciar re-runs the full entrance. Created AFTER the game-over and
+    // result overlays so their add.text/container creation order (relied on
+    // by scene tests) never shifts.
+    this.halftimeBanner = new HalftimeBanner(
+      this,
+      BALANCE_CONFIG.HALFTIME_BANNER,
+      () => this.manager?.resumeSecondHalf(),
+      () => {
+        this.manager?.restartToIntro();
+        this.beginEntrance();
+      },
+    );
+
+    // Batch B1 (RESULTS): terminal full-time panel reusing the stats payload.
+    // "Jugar de nuevo" resets the match back to INTRO (walk-in re-runs).
+    // Created AFTER the halftime banner so existing creation order never shifts.
+    this.fulltimeBanner = new FulltimeBanner(
+      this,
+      BALANCE_CONFIG.FULLTIME_BANNER,
+      () => {
+        this.manager?.restartToIntro();
+        this.beginEntrance();
+      },
+    );
+
+    // Batch C (foul signal): transient FALTA/PENAL overlay, shown on the
+    // PLAYING -> FREE_KICK/PENALTY edge next to the whistle.
+    this.foulBanner = new FoulBanner(this, BALANCE_CONFIG.FOUL_BANNER);
+
+    // Batch B1 (tactics): minimal switching UI — keyboard shortcut + small
+    // HUD label, no menus or sliders. T cycles, 1/2/3 jump directly.
+    const TC = BALANCE_CONFIG.TACTICS;
+    this.tacticsLabel = this.add.text(
+      TC.LABEL_X_PX,
+      TC.LABEL_Y_PX,
+      this.tacticsText(),
+      {
+        fontFamily: 'monospace',
+        fontSize: TC.LABEL_FONT_SIZE_PX,
+        color: TC.LABEL_COLOR,
+      },
+    ).setOrigin(1, 0).setDepth(10);
+    this.input.keyboard?.on('keydown-T', () => this.cycleTactics());
+    this.input.keyboard?.on('keydown-ONE', () => this.applyTactics('defensive'));
+    this.input.keyboard?.on('keydown-TWO', () => this.applyTactics('balanced'));
+    this.input.keyboard?.on('keydown-THREE', () => this.applyTactics('offensive'));
+
+    // R key listener for restart (terminal states incl. new FULL_TIME/RESULTS)
     this.input.keyboard?.on('keydown-R', () => {
-      if (this.manager?.state === 'GAME_OVER') {
+      if (
+        this.manager?.state === 'GAME_OVER' ||
+        this.manager?.state === 'FULL_TIME' ||
+        this.manager?.state === 'RESULTS'
+      ) {
         this.manager.restart();
         this.gameOverGroup.setVisible(false);
       }
@@ -363,6 +554,11 @@ export class MatchScene extends Phaser.Scene {
     // PM-1: meter visible only while the controlled player is charging
     // (created last so it never shifts existing container creation order).
     this.powerMeter = new PowerMeterHud(this);
+
+    // Batch 5 (A): controlled-player indicator follows the initial player
+    // until the selection system performs its first swap.
+    this.indicator = new ControlledPlayerIndicator(this);
+    this.indicator.setTarget(this.player.sprite);
 
     // Playtest round 3 (controls discoverability): static bottom-center hint.
     this.controlsHintText = this.add.text(480, 516, BALANCE_CONFIG.UI.CONTROLS_HINT_TEXT, {
@@ -383,12 +579,75 @@ export class MatchScene extends Phaser.Scene {
     pinHudObject(this.cancelButton, 936, 24, this.cameraZoom, vw, vh);
     pinHudObject(this.gameOverGroup, 480, 270, this.cameraZoom, vw, vh);
     pinHudObject(this.resultOverlayGroup, 480, 270, this.cameraZoom, vw, vh);
+    this.halftimeBanner?.pinToScreen(this.cameraZoom, vw, vh);
+    this.fulltimeBanner?.pinToScreen(this.cameraZoom, vw, vh);
+    this.foulBanner?.pinToScreen(this.cameraZoom, vw, vh);
+    if (this.tacticsLabel) {
+      pinHudObject(
+        this.tacticsLabel,
+        BALANCE_CONFIG.TACTICS.LABEL_X_PX,
+        BALANCE_CONFIG.TACTICS.LABEL_Y_PX,
+        this.cameraZoom,
+        vw,
+        vh,
+      );
+    }
     pinHudObject(this.controlsHintText, 480, 516, this.cameraZoom, vw, vh);
     this.powerMeter.pinToScreen(this.cameraZoom, vw, vh);
+    // Touch widgets use the same counter-scaled screen slots as the HUD so
+    // the large touch zones never shift with camera scroll/zoom.
+    this.touchInput?.pinWidgets(this.cameraZoom, vw, vh);
+
+    // Phase 4 Batch A (section 30): debug overlay — created LAST so no
+    // existing text creation index shifts, hidden by default, every layout
+    // value/key from DEBUG config. Session-only tuning keys act only while
+    // the overlay is visible, so they never shadow gameplay bindings.
+    const DBG = BALANCE_CONFIG.DEBUG;
+    const PANEL = DBG.PANEL;
+    this.debugText = this.add.text(PANEL.X_PX, PANEL.Y_PX, '', {
+      fontFamily: PANEL.FONT_FAMILY,
+      fontSize: PANEL.FONT_SIZE_PX,
+      color: PANEL.TEXT_COLOR,
+      backgroundColor: PANEL.BG_COLOR,
+      padding: PANEL.PADDING,
+      lineSpacing: PANEL.LINE_SPACING_PX,
+    })
+      .setDepth(PANEL.DEPTH)
+      .setScrollFactor(PANEL.SCROLL_FACTOR)
+      .setVisible(false);
+    this.input.keyboard?.on(`keydown-${DBG.TOGGLE_KEY}`, () => this.toggleDebugOverlay());
+    this.input.keyboard?.on(`keydown-${DBG.ADJUST_DOWN_KEY}`, () => {
+      if (this.debugVisible) {
+        this.debugTuning.adjustSelected(-1);
+      }
+    });
+    this.input.keyboard?.on(`keydown-${DBG.ADJUST_UP_KEY}`, () => {
+      if (this.debugVisible) {
+        this.debugTuning.adjustSelected(1);
+      }
+    });
+    this.input.keyboard?.on(`keydown-${DBG.CYCLE_KNOB_KEY}`, () => {
+      if (this.debugVisible) {
+        this.debugTuning.cycle();
+      }
+    });
   }
 
   update(time: number, delta: number): void {
     this.currentTimeMs = time;
+    // Phase 4 Batch A: re-apply live tuning only when a knob changed
+    // (version-gated — no per-frame writes in the hot path).
+    if (this.debugTuning.version !== this.lastTuningVersion) {
+      this.applySpeedAndPassTuning();
+    }
+    // Batch B2: rolling frame-time stats (AGENTS.md section 33) + periodic
+    // dev-console line (no HUD widget — the debug overlay is Phase 4).
+    this.frameTime.push(delta);
+    this.frameCount++;
+    if (this.frameCount % BALANCE_CONFIG.PERF.FRAME_TIME_LOG_EVERY === 0) {
+      // eslint-disable-next-line no-console
+      console.debug(this.frameTime.toLogString());
+    }
     // Manager update first
     if (this.manager) {
       const wasPlaying = this.manager.state === 'PLAYING';
@@ -405,12 +664,25 @@ export class MatchScene extends Phaser.Scene {
       if (this.prevMatchState === 'KICKOFF' && this.manager.state === 'PLAYING') {
         this.audio?.playEvent('WHISTLE');
       }
+      // Batch B2: the whistle also blows the moment a foul stops play.
+      // Batch C: the transient FALTA/PENAL banner shows on the same edge.
+      if (
+        this.prevMatchState === 'PLAYING' &&
+        (this.manager.state === 'FREE_KICK' || this.manager.state === 'PENALTY')
+      ) {
+        this.audio?.playEvent('WHISTLE');
+        this.foulBanner?.show(this.manager.state as 'FREE_KICK' | 'PENALTY');
+      }
       // MF-1/MF-2 guarded events: CROWD_CHEER + net flash fire exactly once on
       // the PLAYING -> GOAL edge; post guard re-arms on every PLAYING resume.
       for (const event of this.goalFeedback.onStateTransition(this.prevMatchState, this.manager.state)) {
         if (event === 'CROWD_CHEER') {
           this.audio?.playEvent('GOAL');
           this.audio?.playEvent('CROWD_CHEER');
+          // Phase 4 Batch B: scorer + nearest teammates celebrate (bounded);
+          // the crowd bed peaks under the layered cheer, then decays back.
+          this.triggerCelebration(this.lastScoringSide);
+          this.peakCrowdIntensity();
         } else {
           this.pulseNet(this.lastScoringSide);
         }
@@ -419,6 +691,8 @@ export class MatchScene extends Phaser.Scene {
       // cached AI commands (e.g. a GK DISTRIBUTE requested while the ball sat
       // inside the goal during the GOAL freeze) and cancels an in-flight
       // human charge so nothing fires the moment PLAYING resumes.
+      // Playtest final: a stale control hold from the previous sequence dies
+      // with the new restart.
       if (this.prevMatchState !== 'KICKOFF' && this.manager.state === 'KICKOFF') {
         for (const ai of this.aiControllers.values()) {
           ai.setCommand(undefined);
@@ -429,11 +703,38 @@ export class MatchScene extends Phaser.Scene {
         this.player?.cancelCharge();
         this.pendingShotKind.clear();
         this.pendingPassTarget.clear();
+        this.foulBanner?.hide();
+        this.controlHoldId = null;
+        // Phase 4 Batch B: kickoff hygiene kills any in-flight celebration /
+        // tackle clip so the restart starts from a clean locomotion state.
+        for (const p of [...this.homeTeam, ...this.awayTeam]) {
+          p.resetAnimation();
+        }
+      }
+      // Batch C (own-restart control): arriving into PLAYING from a restart
+      // hands the human the nearest home teammate on OWN restarts only.
+      if (
+        this.manager.state === 'PLAYING' &&
+        (this.prevMatchState === 'KICKOFF' ||
+          this.prevMatchState === 'THROW_IN' ||
+          this.prevMatchState === 'CORNER' ||
+          this.prevMatchState === 'GOAL_KICK')
+      ) {
+        this.claimRestartControl(this.prevMatchState);
       }
       this.prevMatchState = this.manager.state;
+      this.syncSideSwap();
+      // Batch A: INTRO walk-in locomotion + HALF banner visibility.
+      // Batch B1: terminal RESULTS panel visibility.
+      // Batch B2: away-AI set-piece kick countdown.
+      this.updateEntrance(delta);
+      this.syncHalftimeBanner();
+      this.syncFulltimeBanner();
+      this.updateSetPiece(delta);
     }
 
     const isPlaying = this.manager?.state === 'PLAYING';
+    const isSetPiece = this.manager?.state === 'FREE_KICK' || this.manager?.state === 'PENALTY';
     const resultOverlayVisible = this.resultOverlayGroup?.visible ?? false;
     const canPlay = isPlaying && !resultOverlayVisible;
 
@@ -445,6 +746,13 @@ export class MatchScene extends Phaser.Scene {
 
       // Possession per frame (domain-only wiring; consumed by coordinators)
       const possessorId = this.possession.update(delta, [...homeSnaps, ...awaySnaps], ballSnap);
+      // Batch A: possession-time feed for the halftime banner stats.
+      if (possessorId) {
+        this.manager?.addPossessionTime(
+          possessorId.startsWith('away') ? 'away' : 'home',
+          delta,
+        );
+      }
       // RULE-1: a capture counts as a touch
       if (possessorId && possessorId !== this.lastTouchPossessorId) {
         this.lastTouchPossessorId = possessorId;
@@ -456,6 +764,30 @@ export class MatchScene extends Phaser.Scene {
         );
       } else if (!possessorId) {
         this.lastTouchPossessorId = null;
+      }
+
+      // Batch B2 (simple fouls): tackle-from-behind check on live contact.
+      // Steals resolve first (possession updated above), so this only fires
+      // when the carrier KEEPS the ball with an opponent on their back inside
+      // the tackle radius and moving — the whistle moment. Proximity-only and
+      // team-symmetric: AI PRESS chases and human pressure runs both count as
+      // challenges through the same snapshot rule (see foulRule.ts).
+      if (this.manager?.state === 'PLAYING' && this.possession.possessorId) {
+        const carrierId = this.possession.possessorId;
+        const allSnaps = [...homeSnaps, ...awaySnaps];
+        const carrier = allSnaps.find((s) => s.id === carrierId);
+        if (carrier) {
+          const foul = detectFoul(
+            carrier,
+            allSnaps.filter((s) => s.team !== carrier.team),
+          );
+          if (foul) {
+            const award = this.manager.awardFoul(foul.foulingTeam, carrier.x, carrier.y);
+            if (award) {
+              this.onSetPieceAwarded();
+            }
+          }
+        }
       }
 
       // Playtest round 3: physical interception. The ball may never cross a
@@ -475,6 +807,7 @@ export class MatchScene extends Phaser.Scene {
         );
         if (ev) {
           this.ball.body.setVelocity(0, 0);
+          this.ball.vz = 0;
           this.ball.zTarget = 0;
           this.possession.setPossessor(ev.playerId);
         }
@@ -485,34 +818,53 @@ export class MatchScene extends Phaser.Scene {
       // Carrier feel (fase 4): each coordinator also receives the OPPONENT
       // snapshots so the ball holder can derive its pressure/curve metrics at
       // the regular tick cadence (no per-frame O(n^2)).
-      const homeCmds = this.coordinatorHome.update(time, homeSnaps, ballSnap, this.possession, awaySnaps);
+      // Batch C: the human-controlled id is excluded from press assignment so
+      // the chase slot is never wasted on the player the human already moves.
+      const excludedHuman = this.humanPlayerId !== null ? new Set([this.humanPlayerId]) : undefined;
+      const homeCmds = this.coordinatorHome.update(time, homeSnaps, ballSnap, this.possession, awaySnaps, excludedHuman);
       const awayCmds = this.coordinatorAway.update(time, awaySnaps, ballSnap, this.possession, homeSnaps);
 
       // Per-frame GK evaluation (design 3.0: NEVER inside the 150ms cadence)
       const gkHome = homeSnaps.find((s) => s.role === 'GK');
       const gkAway = awaySnaps.find((s) => s.role === 'GK');
+      // Batch 5 (D+E): GK attack directions follow the halftime side swap.
+      const homeDir: 1 | -1 = this.homeAttackDir ?? 1;
+      const awayDir: 1 | -1 = homeDir === 1 ? -1 : 1;
       if (gkHome) {
         this.coordinatorHome.tickGK(delta, gkHome, {
           ball: ballSnap,
           teammates: homeSnaps.filter((s) => s.role !== 'GK'),
           opponents: awaySnaps,
-          attackDir: 1,
+          attackDir: homeDir,
         });
+        this.applyGkAnimation(this.homeByIndex.get(gkHome.id), this.coordinatorHome.gkState());
       }
       if (gkAway) {
         this.coordinatorAway.tickGK(delta, gkAway, {
           ball: ballSnap,
           teammates: awaySnaps.filter((s) => s.role !== 'GK'),
           opponents: homeSnaps,
-          attackDir: -1,
+          attackDir: awayDir,
         });
+        this.applyGkAnimation(this.awayByIndex.get(gkAway.id), this.coordinatorAway.gkState());
       }
 
-      // Automatic selection (human) — home field players only, GK excluded
-      if (canPlay && this.selectionSystem) {
+      // Automatic selection (human) — home field players only, GK excluded.
+      // Phase 2 closure: candidates carry isEngaged for already-committed
+      // teammates (PRESS chasers) so SELECTION.ENGAGED_PENALTY operates in
+      // production, not just unit tests.
+      // Playtest final: suspended while a restart/set-piece control hold is
+      // active — the claimed taker keeps control until the first kick.
+      if (canPlay && this.selectionSystem && this.controlHoldId === null) {
         const candidates = homeSnaps
           .filter((s) => s.role !== 'GK')
-          .map((s) => ({ id: s.id, x: s.x, y: s.y, role: s.role }));
+          .map((s) => ({
+            id: s.id,
+            x: s.x,
+            y: s.y,
+            role: s.role,
+            isEngaged: homeCmds.get(s.id)?.action === 'PRESS',
+          }));
         const selectedId = this.selectionSystem.update(
           delta,
           candidates,
@@ -534,6 +886,11 @@ export class MatchScene extends Phaser.Scene {
         for (const [id, ai] of this.awayControllers) {
           ai.setCommand(awayCmds.get(id));
         }
+        // Phase 4 Batch B: an AI presser arriving at the carrier plays the
+        // slide-tackle clip (cosmetic — the challenge itself resolves through
+        // the possession/foul systems). Bounded window, no per-frame restarts.
+        this.updatePresserTackleAnimations(homeCmds, homeSnaps, awaySnaps, this.homeByIndex);
+        this.updatePresserTackleAnimations(awayCmds, awaySnaps, homeSnaps, this.awayByIndex);
       }
     }
 
@@ -546,6 +903,21 @@ export class MatchScene extends Phaser.Scene {
       for (const p of this.awayTeam) {
         p.updateController(delta);
       }
+      // Touch runs after the keyboard controller on the same player: a
+      // deflected stick (or A-pressure chase) overrides, a neutral stick
+      // writes nothing and the keyboard keeps authority.
+      this.touchInput?.update(delta);
+    } else if (isSetPiece && controlled) {
+      // Batch B2 set piece: the taker aims with movement keys/stick and
+      // charges the kick while everyone else stays pinned on their marks.
+      controlled.updateController(delta);
+      this.touchInput?.update(delta);
+      for (const p of [...this.homeTeam, ...this.awayTeam]) {
+        if (p !== controlled) {
+          p.body.setVelocity(0, 0);
+          p.body.setAcceleration(0, 0);
+        }
+      }
     } else {
       for (const p of [...this.homeTeam, ...this.awayTeam]) {
         p.body.setVelocity(0, 0);
@@ -557,9 +929,10 @@ export class MatchScene extends Phaser.Scene {
       }
     }
 
-    // Controlled player preUpdate (charge + animation)
+    // Controlled player preUpdate (charge + animation). Batch B2: the charge
+    // accumulates during set pieces too, so the taker can load the kick.
     if (controlled) {
-      if (canPlay) {
+      if (canPlay || isSetPiece) {
         controlled.preUpdate(time, delta);
       } else {
         // A charge held across a stoppage never resumes: cancel it so the
@@ -577,12 +950,19 @@ export class MatchScene extends Phaser.Scene {
         p.updateAnimation(delta);
       }
     }
-    this.ball.preUpdate(time, delta);
+    // Phase 4 Batch A: surface friction reaches the ball through the
+    // existing seam, composed with the live ballFriction knob (scalar math,
+    // no allocation).
+    this.ball.preUpdate(time, delta, this.ballFrictionMultiplier());
 
     // PM-1: HUD reflects the controlled player's charge state.
     if (this.powerMeter && controlled) {
       this.powerMeter.update(controlled.getPower(), controlled.isChargingNow());
     }
+
+    // Batch 5 (A): indicator redrawn every frame from the controlled sprite,
+    // in every match state (including HALF) so the marker never detaches.
+    this.indicator?.update(time);
 
     // PRES-1: per-frame camera follow (selected player + ball, config lerp,
     // look-ahead and pitch-edge clamp) — after entity preUpdate, before HUD.
@@ -592,6 +972,20 @@ export class MatchScene extends Phaser.Scene {
         { x: this.ball.sprite.x, y: this.ball.sprite.y },
         { x: this.ball.body.velocity.x, y: this.ball.body.velocity.y },
       );
+    }
+
+    // Phase 4 Batch B (section 22 layer 3): crowd bed intensity sampled at a
+    // low cadence — the pure level function reads ball zone + score; exactly
+    // one smoothed gain write per sample, never per frame.
+    if (this.manager) {
+      const crowdLevel = this.crowdSampler.update(delta, {
+        ballX: this.ball.sprite.x,
+        scoreHome: this.manager.score.home,
+        scoreAway: this.manager.score.away,
+      });
+      if (crowdLevel !== null) {
+        this.audio?.setCrowdIntensity(crowdLevel);
+      }
     }
 
     // HUD update
@@ -622,9 +1016,14 @@ export class MatchScene extends Phaser.Scene {
     }
 
     // Result overlay score sync; auto-hide once the match ends so the
-    // game-over panel (depth 30) is never stacked under a stale peek (depth 25)
+    // full-time panel (depth 29) is never stacked under a stale peek.
+    // Batch B1: terminal states are FULL_TIME/RESULTS (GAME_OVER deprecated).
     if (this.resultOverlayGroup && this.manager) {
-      if (this.manager.state === 'GAME_OVER') {
+      if (
+        this.manager.state === 'GAME_OVER' ||
+        this.manager.state === 'FULL_TIME' ||
+        this.manager.state === 'RESULTS'
+      ) {
         this.resultOverlayGroup.setVisible(false);
       } else {
         const roScoreText = (this.resultOverlayGroup as any).scoreText as Phaser.GameObjects.Text;
@@ -633,6 +1032,507 @@ export class MatchScene extends Phaser.Scene {
         }
       }
     }
+
+    // Phase 4 Batch A: debug overlay refresh (section 30) — cadence-gated,
+    // zero work while hidden.
+    this.updateDebugOverlay(delta);
+  }
+
+  /**
+   * Phase 4 Batch B (sections 11 + 21): the keeper picks its clip from its own
+   * FSM state — dive/claim/distribute play as bounded overrides (re-armed
+   * every frame while the state holds), positioning states fall back to the
+   * normal idle/run locomotion state machine.
+   */
+  private applyGkAnimation(gk: Player | undefined, state: GKState): void {
+    if (!gk) {
+      return;
+    }
+    const clip = gkClipForState(state);
+    if (isGkOverrideClip(clip)) {
+      gk.applyGkClip(clip);
+    } else {
+      gk.resetAnimation();
+    }
+  }
+
+  /**
+   * Phase 4 Batch B: AI presser within the tackle radius of the live carrier
+   * plays the slide-tackle clip. Same radius as the foul rule so the whistle
+   * moment and the pose coincide; the window bound prevents restart spam.
+   */
+  private updatePresserTackleAnimations(
+    cmds: Map<string, AICommand>,
+    snaps: EntitySnapshot[],
+    opponentSnaps: EntitySnapshot[],
+    byIndex: Map<string, Player>,
+  ): void {
+    const carrierId = this.possession?.possessorId;
+    if (!carrierId) {
+      return;
+    }
+    const carrier = [...snaps, ...opponentSnaps].find((s) => s.id === carrierId);
+    if (!carrier) {
+      return;
+    }
+    const radius = BALANCE_CONFIG.FOUL.TACKLE_RADIUS_PX;
+    for (const s of snaps) {
+      if (s.team === carrier.team || s.role === 'GK' || cmds.get(s.id)?.action !== 'PRESS') {
+        continue;
+      }
+      if (Math.hypot(s.x - carrier.x, s.y - carrier.y) <= radius) {
+        byIndex.get(s.id)?.startTackle();
+      }
+    }
+  }
+
+  /**
+   * Phase 4 Batch B (section 21): the scorer (last toucher on the scoring
+   * side) + the configured nearest non-GK teammates start the bounded
+   * arms-up celebration on GOAL; kickoff hygiene resets them early.
+   */
+  private triggerCelebration(side: 'home' | 'away'): void {
+    if (!this.ball) {
+      return;
+    }
+    const team = side === 'home' ? this.homeTeam : this.awayTeam;
+    const byIndex = side === 'home' ? this.homeByIndex : this.awayByIndex;
+    const chosen = pickCelebrationIds(
+      team.map((p, i) => ({
+        id: `${side}-${i}`,
+        x: p.sprite.x,
+        y: p.sprite.y,
+        isGk: this.roles[side][i] === 'GK',
+      })),
+      { x: this.ball.sprite.x, y: this.ball.sprite.y },
+      this.lastTouchPossessorId,
+      BALANCE_CONFIG.ANIM.CELEBRATION_TEAMMATES,
+    );
+    for (const id of chosen) {
+      byIndex.get(id)?.startCelebration();
+    }
+  }
+
+  /**
+   * Phase 4 Batch B (section 22 layer 3): the crowd bed jumps to the goal
+   * peak under the layered cheer; the sampler continues from there so the
+   * following samples decay back to the zone level.
+   */
+  private peakCrowdIntensity(): void {
+    const peak = BALANCE_CONFIG.AUDIO.CROWD_DYNAMICS.GOAL_PEAK_LEVEL;
+    this.crowdSampler.forceLevel(peak);
+    this.audio?.setCrowdIntensity(peak);
+  }
+
+  /**
+   * Batch A (INTRO): places both teams off-pitch (tunnel/sideline) and arms
+   * the manager walk-in. Targets are the own-half kickoff anchors; the
+   * per-frame updateEntrance drives AI MOVE commands until arrival, skip or
+   * timeout. Simple locomotion reuses AIController seek/arrive — no physics.
+   */
+  private beginEntrance(): void {
+    const E = BALANCE_CONFIG.ENTRANCE;
+    const W = BALANCE_CONFIG.PHYSICS.PITCH_WIDTH;
+    const H = BALANCE_CONFIG.PHYSICS.PITCH_HEIGHT;
+    const homeTargets = kickoffAnchors(
+      this.formations.home,
+      this.manager?.anchorSideFor('home') ?? 'home',
+    );
+    const awayTargets = kickoffAnchors(
+      this.formations.away,
+      this.manager?.anchorSideFor('away') ?? 'away',
+    );
+    this.entranceTargets = new Map<string, { x: number; y: number }>([
+      ...homeTargets.map((a, i) => [`home-${i}`, { x: a.x, y: a.y }] as const),
+      ...awayTargets.map((a, i) => [`away-${i}`, { x: a.x, y: a.y }] as const),
+    ]);
+    for (const [id, p] of this.homeByIndex) {
+      const starts = entranceStarts(this.homeByIndex.size, W, H, E.ENTRANCE_Y_OFFSET_PX);
+      const idx = Number(id.split('-')[1]);
+      const s = starts[idx] ?? starts[0];
+      if (s) {
+        p.setPosition(s.x, s.y);
+      }
+    }
+    for (const [id, p] of this.awayByIndex) {
+      const starts = entranceStarts(this.awayByIndex.size, W, H, E.ENTRANCE_Y_OFFSET_PX);
+      const idx = Number(id.split('-')[1]);
+      const s = starts[idx] ?? starts[0];
+      if (s) {
+        p.setPosition(s.x, s.y);
+      }
+    }
+    this.manager?.enterIntro();
+  }
+
+  /** Batch A: drives the INTRO walk-in; arrival completes into KICKOFF. */
+  private updateEntrance(delta: number): void {
+    if (this.manager?.state !== 'INTRO') {
+      return;
+    }
+    const E = BALANCE_CONFIG.ENTRANCE;
+    let allArrived = true;
+    const drive = (
+      byIndex: Map<string, Player>,
+      ctrls: Map<string, AIController>,
+    ): void => {
+      for (const [id, p] of byIndex) {
+        const t = this.entranceTargets.get(id);
+        if (!t) {
+          continue;
+        }
+        const dist = Math.hypot(t.x - p.sprite.x, t.y - p.sprite.y);
+        if (dist > E.ENTRANCE_ARRIVE_RADIUS_PX) {
+          allArrived = false;
+        }
+        ctrls.get(id)?.setCommand({ action: 'MOVE', targetX: t.x, targetY: t.y });
+      }
+    };
+    drive(this.homeByIndex, this.aiControllers);
+    drive(this.awayByIndex, this.awayControllers);
+    for (const p of [...this.homeTeam, ...this.awayTeam]) {
+      p.updateController(delta);
+    }
+    if (allArrived) {
+      this.manager?.completeIntro();
+    }
+  }
+
+  /** Batch A: banner shows during HALF with live score + stats, hides after. */
+  private syncHalftimeBanner(): void {
+    if (!this.manager || !this.halftimeBanner) {
+      return;
+    }
+    if (this.manager.state === 'HALF') {
+      if (!this.halftimeBanner.visible) {
+        this.halftimeBanner.show(
+          halftimeBannerData(this.manager.score, this.manager.stats.snapshot()),
+        );
+      }
+    } else if (this.halftimeBanner.visible) {
+      this.halftimeBanner.hide();
+    }
+  }
+
+  /** Batch B1: full-time panel shows at terminal RESULTS, hides elsewhere. */
+  private syncFulltimeBanner(): void {
+    if (!this.manager || !this.fulltimeBanner) {
+      return;
+    }
+    if (this.manager.state === 'RESULTS') {
+      if (!this.fulltimeBanner.visible) {
+        this.fulltimeBanner.show(
+          halftimeBannerData(this.manager.score, this.manager.stats.snapshot()),
+        );
+      }
+    } else if (this.fulltimeBanner.visible) {
+      this.fulltimeBanner.hide();
+    }
+  }
+
+  /**
+   * Batch B2: a foul whistle just stopped play. Clears possession + stale
+   * commands (same hygiene as the KICKOFF transition), arms the set-piece
+   * tracker, and hands a home set piece straight to the taker so the kick is
+   * immediately playable.
+   */
+  private onSetPieceAwarded(): void {
+    this.possession?.clear();
+    this.lastTouchPossessorId = null;
+    for (const ai of this.aiControllers.values()) {
+      ai.setCommand(undefined);
+    }
+    for (const ai of this.awayControllers.values()) {
+      ai.setCommand(undefined);
+    }
+    this.player?.cancelCharge();
+    this.pendingShotKind.clear();
+    this.pendingPassTarget.clear();
+    this.setPiece = { timerMs: 0, taken: false };
+    const sp = this.manager?.lastSetPiece;
+    if (sp && sp.team === 'home' && sp.kickerTeam === 'home') {
+      // Playtest final: the taker is controlled through the set piece and
+      // the resume; the selector is synced so it cannot steal the taker back
+      // on the award frame (stale canPlay) nor on the kick edge.
+      const takerId = `home-${sp.kickerIndex}`;
+      this.selectionSystem?.forceSelect(takerId);
+      this.swapToHuman(takerId);
+      this.controlHoldId = takerId;
+    }
+  }
+
+  /**
+   * Batch B2: while a set piece pends, counts the away-AI kick delay and fires
+   * one synthesized shot at the goal (resume on kick flows through the normal
+   * handleAIKick -> wireShots -> notifySetPieceKick path). Home set pieces
+   * wait for the human taker; the manager safety timeout covers abandonment.
+   */
+  private updateSetPiece(delta: number): void {
+    const state = this.manager?.state;
+    if (state !== 'FREE_KICK' && state !== 'PENALTY') {
+      this.setPiece = null;
+      return;
+    }
+    if (!this.setPiece) {
+      this.setPiece = { timerMs: 0, taken: false };
+    }
+    const sp = this.manager?.lastSetPiece;
+    if (!sp || sp.team !== 'away' || this.setPiece.taken) {
+      return;
+    }
+    this.setPiece.timerMs += delta;
+    if (this.setPiece.timerMs < BALANCE_CONFIG.FOUL.SET_PIECE_AI_DELAY_MS) {
+      return;
+    }
+    this.setPiece.taken = true;
+    const kicker =
+      sp.kickerTeam === 'home'
+        ? this.homeByIndex.get(`home-${sp.kickerIndex}`)
+        : this.awayByIndex.get(`away-${sp.kickerIndex}`);
+    if (!kicker) {
+      return;
+    }
+    const dir = this.manager?.attackDirection('away') ?? -1;
+    const goalX =
+      dir === 1
+        ? BALANCE_CONFIG.PHYSICS.PITCH_WIDTH - BALANCE_CONFIG.FOUL.SET_PIECE_AI_GOAL_OFFSET_PX
+        : BALANCE_CONFIG.FOUL.SET_PIECE_AI_GOAL_OFFSET_PX;
+    this.handleAIKick(kicker, {
+      action: 'SHOOT',
+      targetX: goalX,
+      targetY: BALANCE_CONFIG.PHYSICS.PITCH_HEIGHT / 2,
+      power: BALANCE_CONFIG.FOUL.SET_PIECE_AI_POWER,
+    });
+  }
+
+  /**
+   * Batch C: draws both goal frames (posts + crossbar + cheap net) EXACTLY
+   * over the detection zones from goalFrameGeometry — every size, color and
+   * depth comes from BALANCE_CONFIG.GOAL_FRAME, no literals here.
+   */
+  private drawGoalFrames(): void {
+    const GF = BALANCE_CONFIG.GOAL_FRAME;
+    const frames = goalFrameGeometry();
+    for (const side of [frames.left, frames.right]) {
+      const mouthCy = (side.mouthTopY + side.mouthBottomY) / FRAME_MID_DIVISOR;
+      const mouthH = side.mouthBottomY - side.mouthTopY;
+      const netCx = (side.net.x1 + side.net.x2) / FRAME_MID_DIVISOR;
+      const netW = Math.abs(side.net.x2 - side.net.x1);
+      this.add
+        .rectangle(netCx, mouthCy, netW, mouthH, GF.NET_COLOR, GF.NET_ALPHA)
+        .setDepth(GF.FRAME_DEPTH);
+      // Cheap mesh: evenly spaced verticals across the net depth.
+      for (let i = 1; i <= GF.NET_MESH_LINES; i++) {
+        const lineX = side.net.x1 + (netW * i) / (GF.NET_MESH_LINES + 1);
+        this.add
+          .rectangle(lineX, mouthCy, GF.MESH_LINE_WIDTH_PX, mouthH, GF.NET_COLOR, GF.NET_ALPHA)
+          .setDepth(GF.FRAME_DEPTH);
+      }
+      this.add
+        .rectangle(side.postTop.cx, side.postTop.cy, side.postTop.w, side.postTop.h, GF.POST_COLOR, GF.POST_ALPHA)
+        .setDepth(GF.FRAME_DEPTH);
+      this.add
+        .rectangle(side.postBottom.cx, side.postBottom.cy, side.postBottom.w, side.postBottom.h, GF.POST_COLOR, GF.POST_ALPHA)
+        .setDepth(GF.FRAME_DEPTH);
+      this.add
+        .rectangle(side.crossbar.cx, side.crossbar.cy, side.crossbar.w, side.crossbar.h, GF.CROSSBAR_COLOR, GF.CROSSBAR_ALPHA)
+        .setDepth(GF.FRAME_DEPTH);
+    }
+  }
+
+  /**
+   * Batch C (own-restart control): on the resume edge into PLAYING, hand the
+   * human the nearest-to-ball home teammate (the taker stands on the ball, so
+   * nearest == taker). Opponent restarts resolve to null and never steal
+   * control. The GK is ineligible — selection never controls it.
+   */
+  private claimRestartControl(prevState: RestartControlKind): void {
+    if (!this.manager || !this.ball) {
+      return;
+    }
+    let team: 'home' | 'away' | null = null;
+    if (prevState === 'KICKOFF') {
+      team = this.manager.kickoffTeam;
+    } else if (prevState === 'THROW_IN' || prevState === 'CORNER' || prevState === 'GOAL_KICK') {
+      team = this.manager.lastRestartAward?.team ?? null;
+    } else {
+      return;
+    }
+    if (team !== 'home') {
+      return;
+    }
+    const ineligible = new Set<number>();
+    this.roles.home.forEach((role, i) => {
+      if (role === 'GK') {
+        ineligible.add(i);
+      }
+    });
+    const id = restartControlId({
+      kind: prevState,
+      restartTeam: team,
+      ball: { x: this.ball.sprite.x, y: this.ball.sprite.y },
+      home: this.homeTeam.map((p) => ({ x: p.sprite.x, y: p.sprite.y })),
+      ineligible,
+    });
+    if (id !== null) {
+      // Playtest final: sync the selector with the claim (it must not
+      // re-select its stale pick on the resume frame) and HOLD the taker
+      // through PLAYING until the first kick of the ball.
+      this.selectionSystem?.forceSelect(id);
+      this.swapToHuman(id);
+      this.controlHoldId = id;
+    }
+  }
+
+  /** Batch B2: rolling frame-time stats for the dev console / debug overlay. */
+  public getFrameTimeStats(): { avg: number; max: number; count: number } {
+    return { avg: this.frameTime.avg, max: this.frameTime.max, count: this.frameTime.count };
+  }
+
+  /**
+   * Phase 4 Batch A: surface friction multiplier reaching the ball each
+   * frame, composed with the live ballFriction tuning knob.
+   */
+  private ballFrictionMultiplier(): number {
+    const surface =
+      this.weatherSystem?.frictionMultiplier ??
+      BALANCE_CONFIG.PHYSICS.SURFACE_NEUTRAL_FRICTION;
+    return surface * this.debugTuning.getValue('ballFriction');
+  }
+
+  /**
+   * Phase 4 Batch A: applies the surface sprint modifier (section 13 —
+   * shared by BOTH teams) and the live playerSpeed / passPower knobs through
+   * the single speed path. Version-gated from update(); called once from
+   * create().
+   */
+  private applySpeedAndPassTuning(): void {
+    const sprint =
+      this.weatherSystem?.sprintSpeedMultiplier ??
+      BALANCE_CONFIG.PHYSICS.SURFACE_NEUTRAL_FRICTION;
+    const maxSpeed =
+      BALANCE_CONFIG.PHYSICS.PLAYER_MAX_SPEED *
+      sprint *
+      this.debugTuning.getValue('playerSpeed');
+    const passPct = this.debugTuning.getValue('passPower');
+    for (const p of this.homeTeam) {
+      p.maxSpeed = maxSpeed;
+      p.passPowerPct = passPct;
+    }
+    for (const p of this.awayTeam) {
+      p.maxSpeed = maxSpeed;
+      p.passPowerPct = passPct;
+    }
+    // Live camera lerp knob (mocked test harnesses may lack the method).
+    const cam = this.cameraController as unknown as { setLerp?: (f: number) => void } | undefined;
+    cam?.setLerp?.(this.debugTuning.getValue('cameraLerp'));
+    this.lastTuningVersion = this.debugTuning.version;
+  }
+
+  /**
+   * Phase 4 Batch A: cheap pitch visual evolution — full-pitch tint plus
+   * deterministic worn patches (flat rects, config colors/counts, no RNG,
+   * no particles). Drawn immediately after the pitch image so insertion
+   * order keeps them under every entity.
+   */
+  private applySurfaceVisuals(): void {
+    const level =
+      this.weatherSystem?.pitchQuality ?? BALANCE_CONFIG.SURFACE.DEFAULT_LEVEL;
+    const visuals = BALANCE_CONFIG.SURFACE.VISUALS[level];
+    const phys = BALANCE_CONFIG.PHYSICS;
+    if (visuals.TINT_ALPHA > 0) {
+      this.add.rectangle(
+        phys.PITCH_WIDTH / FRAME_MID_DIVISOR,
+        phys.PITCH_HEIGHT / FRAME_MID_DIVISOR,
+        phys.PITCH_WIDTH,
+        phys.PITCH_HEIGHT,
+        visuals.TINT_COLOR,
+        visuals.TINT_ALPHA,
+      );
+    }
+    const spanW = phys.PITCH_WIDTH - visuals.PATCH_INSET_PX * FRAME_MID_DIVISOR;
+    const spanH = phys.PITCH_HEIGHT - visuals.PATCH_INSET_PX * FRAME_MID_DIVISOR;
+    if (visuals.PATCH_COUNT <= 0 || spanW <= 0 || spanH <= 0) {
+      return;
+    }
+    for (let i = 0; i < visuals.PATCH_COUNT; i++) {
+      const px = visuals.PATCH_INSET_PX + (i * visuals.PATCH_STRIDE_X_PX) % spanW;
+      const py = visuals.PATCH_INSET_PX + (i * visuals.PATCH_STRIDE_Y_PX) % spanH;
+      this.add.rectangle(px, py, visuals.PATCH_W_PX, visuals.PATCH_H_PX, visuals.PATCH_COLOR, visuals.PATCH_ALPHA);
+    }
+  }
+
+  /** Phase 4 Batch A (section 30): debug overlay toggle — off by default. */
+  private toggleDebugOverlay(): void {
+    this.debugVisible = !this.debugVisible;
+    this.debugText?.setVisible(this.debugVisible);
+    // Refresh immediately on enable; start from zero on disable.
+    this.debugAccumMs = this.debugVisible ? BALANCE_CONFIG.DEBUG.UPDATE_INTERVAL_MS : 0;
+  }
+
+  /**
+   * Phase 4 Batch A (section 30): cadence-gated debug panel refresh.
+   * Hidden overlay returns at once — no gathering, no allocation.
+   */
+  private updateDebugOverlay(delta: number): void {
+    if (!this.debugVisible || !this.debugText) {
+      return;
+    }
+    const DBG = BALANCE_CONFIG.DEBUG;
+    this.debugAccumMs += delta;
+    if (this.debugAccumMs < DBG.UPDATE_INTERVAL_MS) {
+      return;
+    }
+    this.debugAccumMs = 0;
+    const ws = this.weatherSystem;
+    const neutral = BALANCE_CONFIG.PHYSICS.SURFACE_NEUTRAL_FRICTION;
+    const ballVel = this.ball?.body.velocity ?? { x: 0, y: 0 };
+    const payload = buildDebugPayload({
+      frameStats: this.getFrameTimeStats(),
+      matchState: this.manager?.state ?? 'UNKNOWN',
+      possessionHomePct:
+        this.manager?.stats?.possessionPct('home') ?? DBG.PANEL.DEFAULT_POSSESSION_PCT,
+      controlledPlayerId: this.humanPlayerId,
+      selectionCandidates: this.selectionSystem?.getTopCandidates?.() ?? [],
+      pressersHome: this.coordinatorHome?.getPresserIds?.().length ?? 0,
+      pressersAway: this.coordinatorAway?.getPresserIds?.().length ?? 0,
+      holderId: this.possession?.possessorId ?? null,
+      ballX: this.ball?.sprite.x ?? 0,
+      ballY: this.ball?.sprite.y ?? 0,
+      ballZ: this.ball?.z ?? 0,
+      ballSpeed: Math.hypot(ballVel.x, ballVel.y),
+      surface: {
+        level: ws?.pitchQuality ?? BALANCE_CONFIG.SURFACE.DEFAULT_LEVEL,
+        weather: ws?.weatherType ?? BALANCE_CONFIG.WEATHER.DEFAULT_TYPE,
+        frictionMultiplier: ws?.frictionMultiplier ?? neutral,
+        sprintSpeedMultiplier: ws?.sprintSpeedMultiplier ?? neutral,
+        receptionDifficulty: ws?.receptionDifficulty ?? neutral,
+      },
+      rngSeed: BALANCE_CONFIG.RNG.DEFAULT_SEED,
+    });
+    this.debugText.setText(formatDebugPayload(payload, this.debugTuning));
+  }
+
+  /** Batch B1: HUD label copy for the active tactics preset (config-driven). */
+  private tacticsText(): string {
+    const TC = BALANCE_CONFIG.TACTICS;
+    const label = (TC.LABELS as Record<string, string>)[this.tacticsId] ?? this.tacticsId;
+    return `${TC.LABEL_PREFIX}: ${label} (${TC.HINT_KEY})`;
+  }
+
+  /** Batch B1: apply a preset to both coordinators + refresh the HUD label. */
+  private applyTactics(id: TacticsId): void {
+    this.tacticsId = id;
+    this.coordinatorHome?.setTactics(id);
+    this.coordinatorAway?.setTactics(id);
+    this.tacticsLabel?.setText(this.tacticsText());
+  }
+
+  /** Batch B1: T cycles Defensiva -> Equilibrada -> Ofensiva. */
+  private cycleTactics(): void {
+    const order: TacticsId[] = ['defensive', 'balanced', 'offensive'];
+    const next = order[(order.indexOf(this.tacticsId) + 1) % order.length];
+    this.applyTactics(next as TacticsId);
   }
 
   /** Builds entity snapshots in anchor order (TeamCoordinator contract). */
@@ -676,7 +1576,47 @@ export class MatchScene extends Phaser.Scene {
       next.attachController(this.humanController);
       this.player = next;
       this.humanPlayerId = newId;
+      // Batch 5 (A): the marker tracks selection switches instantly.
+      this.indicatorModel.setSelectedId(newId);
+      this.indicator?.setTarget(next.sprite);
+      // Touch widgets are built once; attach retargets the controlled player.
+      this.touchInput?.attach(this, next);
     }
+  }
+
+  /**
+   * Shared human/touch match context (MC-1/MC-2). attackDir follows the
+   * halftime side swap instead of staying hardcoded. Playtest final:
+   * opponents feed the directional-pass openness score.
+   */
+  private buildHumanContext(): PassContext {
+    return {
+      getBallPos: () => ({ x: this.ball.sprite.x, y: this.ball.sprite.y }),
+      getTeammates: () =>
+        this.homeTeam
+          .filter((p) => p !== this.player)
+          .map((p) => ({ x: p.sprite.x, y: p.sprite.y })),
+      getOpponents: () =>
+        this.awayTeam.map((p) => ({ x: p.sprite.x, y: p.sprite.y })),
+      attackDir: this.homeAttackDir,
+    };
+  }
+
+  /**
+   * Batch 5 (D+E): applies the halftime side swap to coordinators and input
+   * contexts exactly once per swap edge.
+   */
+  private syncSideSwap(): void {
+    const swapped = this.manager?.sidesSwapped ?? false;
+    if (swapped === this.lastSidesSwapped) {
+      return;
+    }
+    this.lastSidesSwapped = swapped;
+    this.homeAttackDir = this.manager?.attackDirection('home') ?? 1;
+    this.coordinatorHome?.setSidesSwapped(swapped);
+    this.coordinatorAway?.setSidesSwapped(swapped);
+    this.humanController?.setContext(this.buildHumanContext());
+    this.touchInput?.setContext(this.buildHumanContext());
   }
 
   /**
@@ -740,6 +1680,13 @@ export class MatchScene extends Phaser.Scene {
 
   private wireShots(p: Player): void {
     p.onShot((power, facing, cbKind) => {
+      // Phase 4 Batch A: live shot-power tuning knob (session-only, section
+      // 30) — clamped so a debug knob can never break the kick contract.
+      const tunedPower = Phaser.Math.Clamp(
+        power * this.debugTuning.getValue('shotPower'),
+        0,
+        1,
+      );
       // Playtest remediation: a kick (AI or human key release) may move the
       // ball ONLY during live play. Human key listeners are event-driven and
       // bypass the per-frame canPlay gating, so the state check lives here.
@@ -778,9 +1725,22 @@ export class MatchScene extends Phaser.Scene {
       // or the GK — a single kickoff kick can no longer be an unstoppable goal.
       const effectivePower =
         kindEvent === 'KICK'
-          ? applyKickoffGracePowerCap(power, this.playResumedAtMs, this.currentTimeMs)
-          : power;
+          ? applyKickoffGracePowerCap(tunedPower, this.playResumedAtMs, this.currentTimeMs)
+          : tunedPower;
       this.ball.applyKick(facing, effectivePower);
+      // Playtest final: the first applied kick of the ball releases the
+      // restart/set-piece control hold — normal auto-selection resumes.
+      this.controlHoldId = null;
+      // Batch B2 (resume on kick): a kick taken from a set piece restarts play.
+      this.manager?.notifySetPieceKick();
+      // Batch A: kick-path stats feed (PASS vs KICK) for the halftime banner.
+      if (meta) {
+        if (kindEvent === 'PASS') {
+          this.manager?.recordPass(meta.team);
+        } else {
+          this.manager?.recordShot(meta.team);
+        }
+      }
       // Playtest round 3 pass feel: a pass is visibly lifted and the intended
       // receiver gets a widened capture radius for the arrival moment.
       if (kindEvent === 'PASS') {
@@ -794,9 +1754,16 @@ export class MatchScene extends Phaser.Scene {
       // PRES-2 + MC-1: PASS vs KICK hint (AI map or human contextual pass).
       this.pendingShotKind.delete(p);
       this.audio?.playEvent(kindEvent);
-      if (effectivePower > 0.6) {
-        const magnitude = Phaser.Math.Clamp(effectivePower * 0.02, 0.008, 0.02);
-        this.cameras.main.shake(100, magnitude);
+      // Phase 4 Batch A: shot-impact shake moved to FEEDBACK.SHOT_SHAKE
+      // config (zero-literals rule).
+      const shake = BALANCE_CONFIG.FEEDBACK.SHOT_SHAKE;
+      if (effectivePower > shake.POWER_THRESHOLD) {
+        const magnitude = Phaser.Math.Clamp(
+          effectivePower * shake.POWER_SCALE,
+          shake.MAGNITUDE_MIN,
+          shake.MAGNITUDE_MAX,
+        );
+        this.cameras.main.shake(shake.DURATION_MS, magnitude);
       }
     });
   }

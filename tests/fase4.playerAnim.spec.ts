@@ -51,9 +51,10 @@ describe('PA-1 buildFrameMap + resolveClipFrames (2.1)', () => {
     expect(map.get('home-idle')).toBe(0);
     expect(map.get('home-run')).toBe(1);
     expect(map.get('home-kick')).toBe(2);
-    expect(map.get('away-idle')).toBe(3);
-    expect(map.get('away-run')).toBe(4);
-    expect(map.get('away-kick')).toBe(5);
+    // Phase 4 Batch B: 8 clips per team, home row first — away row starts at 8.
+    expect(map.get('away-idle')).toBe(8);
+    expect(map.get('away-run')).toBe(9);
+    expect(map.get('away-kick')).toBe(10);
   });
 
   it('PA-1-S1: run clip contains ONLY run frames (no kick)', () => {

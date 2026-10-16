@@ -51,6 +51,16 @@ export class CameraController {
     }
   }
 
+  /**
+   * Phase 4 Batch A (section 30): live lerp override for the debug tuning
+   * knob. Non-finite or non-positive factors are ignored (never NaN).
+   */
+  public setLerp(factor: number): void {
+    if (Number.isFinite(factor) && factor > 0) {
+      this.lerpFactor = factor;
+    }
+  }
+
   public update(
     playerPos: { x: number; y: number },
     ballPos: { x: number; y: number },

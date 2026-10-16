@@ -18,9 +18,14 @@ import type { AICommand } from '../ai/commands';
  * whose body is next to the ball.
  */
 
-/** Kicks are legal exclusively during live play. */
+/**
+ * Kicks are legal during live play AND from set pieces (Batch B2 resume on
+ * kick: the taker's kick in FREE_KICK/PENALTY is what returns the match to
+ * PLAYING via MatchManager.notifySetPieceKick). Every other stoppage still
+ * blocks kicks so stale commands can never move a frozen ball.
+ */
 export function canApplyKick(state: MatchState | string | undefined): boolean {
-  return state === 'PLAYING';
+  return state === 'PLAYING' || state === 'FREE_KICK' || state === 'PENALTY';
 }
 
 /** The kicker must be within reach of the ball to affect it at all. */

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { TeamCoordinator } from '../src/ai/TeamCoordinator';
+import { TeamCoordinator, blockShiftForBall, clampDefenderGoalSide } from '../src/ai/TeamCoordinator';
 import { FootballAI } from '../src/ai/FootballAI';
 import { PossessionSystem } from '../src/match/PossessionSystem';
 import { FORMATIONS, anchorCoords, type FormationId } from '../src/data/formations';
@@ -62,6 +62,22 @@ describe('TeamCoordinator — press coordination (Fase 2 gate)', () => {
     const snaps = teamSnapshots('5v5', 'home');
     const possession = new PossessionSystem();
     const anchors = anchorCoords(FORMATIONS['5v5'], 'home', PITCH_W, PITCH_H);
+    // Living-movement spec change: the block intentionally slides ball-side
+    // on top of anchors (blockShiftForBall + DF goal-side rail), so the
+    // tolerance is measured against the SHIFTED spots — the residual must
+    // stay idle-grade (sway), proving the line holds while sliding.
+    const flankBall = ballAt(100, 100);
+    const block = blockShiftForBall(flankBall);
+    const expectedSpots = anchors.map((a) => ({
+      x: Math.max(
+        0,
+        Math.min(
+          PITCH_W,
+          clampDefenderGoalSide(a.x + block.dx, a.role, flankBall.x, 1),
+        ),
+      ),
+      y: Math.max(0, Math.min(PITCH_H, a.y + block.dy)),
+    }));
 
     let nowMs = 0;
     let ticks = 0;
@@ -77,8 +93,8 @@ describe('TeamCoordinator — press coordination (Fase 2 gate)', () => {
           pressers++;
         } else if (cmd.action === 'MOVE') {
           const idx = Number(id.split('-')[1]);
-          const anchor = anchors[idx];
-          const dev = Math.hypot(cmd.targetX - anchor.x, cmd.targetY - anchor.y);
+          const expected = expectedSpots[idx];
+          const dev = Math.hypot(cmd.targetX - expected.x, cmd.targetY - expected.y);
           maxAnchorDeviation = Math.max(maxAnchorDeviation, dev);
         }
       }

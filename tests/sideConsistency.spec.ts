@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { anchorCoords, resolveFormation } from '../src/data/formations';
+import { kickoffAnchors } from '../src/match/restartPlacement';
 import { FormationSystem } from '../src/match/FormationSystem';
 import { TeamCoordinator } from '../src/ai/TeamCoordinator';
 import { PossessionSystem } from '../src/match/PossessionSystem';
@@ -37,8 +38,9 @@ describe('side consistency — formation anchors', () => {
   });
 
   it('MatchScene spawn conversion and MatchManager reset conversion are the SAME function outputs', () => {
-    // MatchScene.create uses anchorCoords(resolveFormation(...)); MatchManager
-    // resetPositions uses FormationSystem.anchors(...). Both must agree.
+    // MatchScene.create and MatchManager resetPositions both use kickoffAnchors
+    // (batch 5 own-half clamp over the same data); the raw conversions below
+    // must still agree with each other.
     for (const id of ['3v3', '11v11'] as const) {
       for (const side of ['home', 'away'] as const) {
         const spawn = anchorCoords(resolveFormation(id), side, W, H);
@@ -109,10 +111,11 @@ describe('side consistency — goal + reset keeps sides', () => {
     } as any;
   }
 
-  it('after GOAL -> resetMatch every player lands on its spawn anchor (no side flip)', () => {
+  it('after GOAL -> resetMatch every player lands on its kickoff anchor (no side flip)', () => {
     const mgr = new MatchManager(CLOCK);
-    const spawnHome = anchorCoords(resolveFormation('3v3'), 'home', W, H);
-    const spawnAway = anchorCoords(resolveFormation('3v3'), 'away', W, H);
+    // Batch 5: kickoff spots clamp midfield leakers to their own half.
+    const spawnHome = kickoffAnchors('3v3', 'home');
+    const spawnAway = kickoffAnchors('3v3', 'away');
     const home = spawnHome.map((a) => fakePlayer(a.x, a.y));
     const away = spawnAway.map((a) => fakePlayer(a.x, a.y));
     const ball: any = {

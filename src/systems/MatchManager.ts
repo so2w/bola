@@ -1,15 +1,22 @@
 import type { FormationId } from '../data/formations';
-import { FormationSystem } from '../match/FormationSystem';
 import { BALANCE_CONFIG } from '../data/balance';
+import { MatchStatsTracker } from '../match/MatchStats';
 import { otherTeam, TouchTracker, type ExitClassification, type TeamSide } from '../match/TouchTracker';
 import {
   RESTART_PLACEMENT_CONFIG,
   cornerPlacement,
+  freeKickPlacement,
   goalKickPlacement,
+  kickoffAnchors,
+  penaltyPlacement,
   throwInPlacement,
   type RestartPlacement,
   type TeamShape,
 } from '../match/restartPlacement';
+import {
+  awardForFoul,
+  type FoulAward,
+} from '../match/foulRule';
 import type { Ball } from '../entities/Ball';
 import type { Player } from '../entities/Player';
 
@@ -26,6 +33,10 @@ export type MatchState =
   | 'PENALTY'
   | 'GOAL'
   | 'OUT_OF_BOUNDS'
+  | 'HALF'
+  | 'FULL_TIME'
+  | 'RESULTS'
+  /** Deprecated Batch B1 alias: kept for legacy call sites, never entered. */
   | 'GAME_OVER';
 
 export interface MatchFormations {
@@ -40,6 +51,29 @@ export interface MatchClockConfig {
   KICKOFF_PAUSE_MS: number;
   GOAL_PAUSE_MS: number;
   OUT_OF_BOUNDS_PAUSE_MS: number;
+  /**
+   * Batch 5 (D+E): halftime breather in ms. Optional so legacy custom clocks
+   * (short test clocks built before halftime existed) never enter HALF —
+   * only clocks that opt in get the mid-match pause + side swap.
+   */
+  HALF_PAUSE_MS?: number;
+  /**
+   * Batch B1 (full time): whistle-to-panel pause between FULL_TIME and
+   * RESULTS. Optional so legacy custom clocks advance via the BALANCE
+   * default instead of stalling.
+   */
+  FULL_TIME_PAUSE_MS?: number;
+  /**
+   * Batch B2 (set pieces): safety resume when nobody takes the kick
+   * (anti-soft-lock). Optional so legacy custom clocks fall back to BALANCE.
+   */
+  SET_PIECE_MAX_WAIT_MS?: number;
+  /**
+   * Batch A (player entrance): INTRO walk-in budget in ms + skip flag.
+   * Optional so clocks that never call enterIntro() stay on KICKOFF.
+   */
+  INTRO_DURATION_MS?: number;
+  INTRO_SKIPPABLE?: boolean;
 }
 
 interface PendingRestart {
@@ -67,16 +101,45 @@ export class MatchManager {
   public readonly touchTracker = new TouchTracker();
   /** Debug/telemetry: last restart award (kind + team) consumed at placement. */
   public lastRestartAward: { kind: string; team: TeamSide } | null = null;
+  /**
+   * Batch B2: last set-piece award with the designated kicker (team + squad
+   * index carrying the placement 'kicker'/'shooter' role). The scene uses it
+   * to hand control to the taker (home) or synthesize the AI kick (away).
+   */
+  public lastSetPiece: {
+    kind: 'FREE_KICK' | 'PENALTY';
+    team: TeamSide;
+    kickerTeam: TeamSide;
+    kickerIndex: number;
+  } | null = null;
+  /** Batch B2: match-time of the last foul award (cooldown, no Date.now). */
+  private lastFoulAtMs = -Infinity;
+  /** Batch B2: match-time elapsed in PLAYING (drives the foul cooldown). */
+  private matchElapsedMs = 0;
+  /**
+   * Batch C (own-restart control): team that owns the next kickoff. Opens
+   * with 'home'; every goal hands the restart to the conceding team. The
+   * scene reads it on the KICKOFF -> PLAYING edge to hand control to the
+   * nearest home teammate on own-team kickoffs only.
+   */
+  public kickoffTeam: TeamSide = 'home';
 
   private readonly clock: MatchClockConfig;
   private scene?: Phaser.Scene;
   private ball?: Ball;
   private homeTeam: Player[] = [];
   private awayTeam: Player[] = [];
-  private formations: MatchFormations = { home: '3v3', away: '3v3' };
+  private formations: MatchFormations = { home: '11v11', away: '11v11' };
   /** RULE-2 double-goal guard: set on handleGoal, cleared on entering KICKOFF. */
   private goalLatch = false;
   private pendingRestart: PendingRestart | null = null;
+  /** Batch 5 (D+E): halftime crosses once per match, then sides stay swapped. */
+  private halftimeDone = false;
+  public sidesSwapped = false;
+  /** Batch A: per-team match stats (shots/passes/goals/possession) for the banner. */
+  public readonly stats = new MatchStatsTracker();
+  /** Batch A: INTRO walk-in countdown (armed by enterIntro). */
+  public introTimer = 0;
 
   constructor(clock: MatchClockConfig = BALANCE_CONFIG.MATCH) {
     this.clock = { ...clock };
@@ -99,6 +162,15 @@ export class MatchManager {
   }
 
   public update(delta: number): void {
+    // Batch A (INTRO): walk-in budget counts down, then kickoff spots.
+    if (this.state === 'INTRO') {
+      this.introTimer -= delta;
+      if (this.introTimer <= 0) {
+        this.completeIntro();
+      }
+      return;
+    }
+
     // KICKOFF → PLAYING after the kickoff pause
     if (this.state === 'KICKOFF') {
       this.kickoffTimer -= delta;
@@ -112,9 +184,16 @@ export class MatchManager {
     // PLAYING: clock at configured game-time scale (CONF-1), check events
     if (this.state === 'PLAYING') {
       const gameDeltaSec = (delta / 1000) * this.clock.GAME_TIME_SCALE;
+      const prevRemaining = this.timeRemaining;
       this.timeRemaining = Math.max(0, this.timeRemaining - gameDeltaSec);
+      this.matchElapsedMs += delta;
+      // Batch 5 (D+E): crossing mid-duration pauses into HALF (clock stops).
+      if (this.shouldEnterHalf(prevRemaining, this.timeRemaining)) {
+        this.enterHalf();
+        return;
+      }
       if (this.timeRemaining <= 0) {
-        this.state = 'GAME_OVER';
+        this.enterFullTime();
         return;
       }
 
@@ -155,7 +234,193 @@ export class MatchManager {
       return;
     }
 
-    // GAME_OVER: nothing to do
+    // FREE_KICK / PENALTY (Batch B2): the clock is stopped and the match
+    // resumes on the kick (scene calls notifySetPieceKick from the kick
+    // path). The safety timer guarantees no soft-lock when nobody kicks.
+    if (this.state === 'FREE_KICK' || this.state === 'PENALTY') {
+      this.freezeEntities();
+      this.resetTimer -= delta;
+      if (this.resetTimer <= 0) {
+        this.touchTracker.reset();
+        this.pendingRestart = null;
+        this.lastSetPiece = null;
+        this.state = 'PLAYING';
+      }
+      return;
+    }
+
+    // HALF: clock stopped, players settle; countdown swaps sides + KICKOFF.
+    if (this.state === 'HALF') {
+      this.resetTimer -= delta;
+      if (this.resetTimer <= 0) {
+        this.beginSecondHalf();
+      }
+      return;
+    }
+
+    // FULL_TIME: final-whistle pause with a stopped clock, then RESULTS.
+    if (this.state === 'FULL_TIME') {
+      this.resetTimer -= delta;
+      if (this.resetTimer <= 0) {
+        this.state = 'RESULTS';
+      }
+      return;
+    }
+
+    // RESULTS + GAME_OVER (deprecated alias): terminal, nothing to do
+  }
+
+  /**
+   * Batch 5 (D+E): halftime triggers exactly once, when the countdown crosses
+   * the midpoint from above. Starting below the midpoint (short test clocks,
+   * resumed saves) never triggers it.
+   */
+  private shouldEnterHalf(prevRemaining: number, nextRemaining: number): boolean {
+    if (this.clock.HALF_PAUSE_MS === undefined || this.halftimeDone) {
+      return false;
+    }
+    const halfPoint = this.clock.TIME_REMAINING_GAME_SECONDS / HALF_DIVISOR;
+    return prevRemaining > halfPoint && nextRemaining <= halfPoint;
+  }
+
+  private enterHalf(): void {
+    this.freezeEntities();
+    this.state = 'HALF';
+    this.resetTimer = this.clock.HALF_PAUSE_MS ?? 0;
+  }
+
+  /**
+   * Batch B1 (full time, AGENTS.md section 7): the clock hits zero in PLAYING
+   * and the match whistles into FULL_TIME with entities frozen; the update
+   * loop advances FULL_TIME into the terminal RESULTS panel after the
+   * configured pause. GAME_OVER stays in the union as a deprecated alias for
+   * legacy call sites but is never entered naturally.
+   */
+  private enterFullTime(): void {
+    this.freezeEntities();
+    this.state = 'FULL_TIME';
+    this.resetTimer = this.clock.FULL_TIME_PAUSE_MS ?? BALANCE_CONFIG.MATCH.FULL_TIME_PAUSE_MS;
+  }
+
+  /**
+   * Batch A (player entrance): arm the INTRO walk-in. The scene places both
+   * teams off-pitch and walks them to kickoff anchors; the manager advances
+   * to KICKOFF on arrival (skipIntro), timeout (update), or not at all when
+   * the clock never opts in (legacy behavior untouched).
+   */
+  public enterIntro(): void {
+    this.freezeEntities();
+    this.state = 'INTRO';
+    this.introTimer = this.clock.INTRO_DURATION_MS ?? BALANCE_CONFIG.MATCH.INTRO_DURATION_MS;
+  }
+
+  /** Batch A: any-key/tap skip for the entrance (config flag). */
+  public skipIntro(): boolean {
+    if (this.state !== 'INTRO') {
+      return false;
+    }
+    const skippable = this.clock.INTRO_SKIPPABLE ?? BALANCE_CONFIG.MATCH.INTRO_SKIPPABLE;
+    if (!skippable) {
+      return false;
+    }
+    this.completeIntro();
+    return true;
+  }
+
+  /** Batch A: entrance finished — snap to kickoff anchors, resume KICKOFF. */
+  public completeIntro(): void {
+    if (this.state !== 'INTRO') {
+      return;
+    }
+    this.resetPositions();
+    this.state = 'KICKOFF';
+    this.kickoffTimer = this.clock.KICKOFF_PAUSE_MS;
+    this.goalLatch = false;
+    this.touchTracker.reset();
+    this.pendingRestart = null;
+    this.lastSetPiece = null;
+  }
+
+  /** Batch A: banner "Continuar" resumes the second half immediately. */
+  public resumeSecondHalf(): void {
+    if (this.state !== 'HALF') {
+      return;
+    }
+    this.beginSecondHalf();
+  }
+
+  /** Batch A: banner "Reiniciar partido" — full reset back to INTRO. */
+  public restartToIntro(): void {
+    this.score = { home: 0, away: 0 };
+    this.timeRemaining = this.clock.TIME_REMAINING_GAME_SECONDS;
+    this.resetTimer = 0;
+    this.goalLatch = false;
+    this.touchTracker.reset();
+    this.pendingRestart = null;
+    this.lastSetPiece = null;
+    this.lastFoulAtMs = -Infinity;
+    this.matchElapsedMs = 0;
+    this.kickoffTeam = 'home';
+    this.halftimeDone = false;
+    this.sidesSwapped = false;
+    this.stats.reset();
+    this.enterIntro();
+  }
+
+  /** Batch A: kick-path feeds (scene calls these when a kick is applied). */
+  public recordShot(team: TeamSide): void {
+    this.stats.recordShot(team);
+  }
+
+  public recordPass(team: TeamSide): void {
+    this.stats.recordPass(team);
+  }
+
+  /** Batch A: possession feed (scene passes the holder's team + frame delta). */
+  public addPossessionTime(team: TeamSide, deltaMs: number): void {
+    this.stats.addPossession(team, deltaMs);
+  }
+
+  /** HALF countdown elapsed: exchange halves, mirror anchors, resume KICKOFF. */
+  private beginSecondHalf(): void {
+    this.halftimeDone = true;
+    this.sidesSwapped = true;
+    this.resetPositions();
+    this.state = 'KICKOFF';
+    this.kickoffTimer = this.clock.KICKOFF_PAUSE_MS;
+    this.goalLatch = false;
+    this.touchTracker.reset();
+    this.pendingRestart = null;
+    this.lastSetPiece = null;
+  }
+
+  /** Anchor side a team lines up on: exchanged after the halftime swap. */
+  public anchorSideFor(team: TeamSide): TeamSide {
+    if (!this.sidesSwapped) {
+      return team;
+    }
+    return otherTeam(team);
+  }
+
+  /**
+   * Horizontal attack direction: +1 attacks rightward, -1 leftward.
+   * Home attacks right before the swap, left after it (away mirrored).
+   */
+  public attackDirection(team: TeamSide): 1 | -1 {
+    const base: 1 | -1 = team === 'home' ? 1 : -1;
+    if (!this.sidesSwapped) {
+      return base;
+    }
+    return base === 1 ? -1 : 1;
+  }
+
+  /** Which team scores by putting the ball in a goal-mouth zone. */
+  public scorerForGoal(goalSide: 'left' | 'right'): TeamSide {
+    const homeAttacksRight = this.attackDirection('home') === 1;
+    if (goalSide === 'right') {
+      return homeAttacksRight ? 'home' : 'away';
+    }
+    return homeAttacksRight ? 'away' : 'home';
   }
 
   private kickTimerExpired(): boolean {
@@ -173,6 +438,9 @@ export class MatchManager {
     } else {
       this.score.away += 1;
     }
+    // Batch C: the conceding team owns the next kickoff.
+    this.kickoffTeam = otherTeam(team);
+    this.stats.recordGoal(team);
 
     this.freezeEntities();
     this.state = 'GOAL';
@@ -234,6 +502,67 @@ export class MatchManager {
     this.resetTimer = this.clock.OUT_OF_BOUNDS_PAUSE_MS;
   }
 
+  /**
+   * Batch B2 (simple fouls): awards a foul committed by `foulingTeam` at
+   * (x, y). Only valid from PLAYING and outside the cooldown window —
+   * anything else returns null with no state change. A box foul by the
+   * defense is a PENALTY, otherwise a FREE_KICK (see foulRule awardForFoul).
+   * Placement applies immediately; the match then waits for the kick
+   * (notifySetPieceKick) or the safety timeout. No cards, no walls.
+   */
+  public awardFoul(foulingTeam: TeamSide, x: number, y: number): FoulAward | null {
+    if (this.state !== 'PLAYING') {
+      return null;
+    }
+    if (this.matchElapsedMs - this.lastFoulAtMs < BALANCE_CONFIG.FOUL.COOLDOWN_MS) {
+      return null;
+    }
+    this.lastFoulAtMs = this.matchElapsedMs;
+    const award = awardForFoul({ x, y }, foulingTeam);
+    const homeShapes = this.teamShapes(this.homeTeam);
+    const awayShapes = this.teamShapes(this.awayTeam);
+
+    let placement: RestartPlacement;
+    if (award.kind === 'FREE_KICK') {
+      placement = freeKickPlacement({ x, y }, award.team, homeShapes, awayShapes, RESTART_PLACEMENT_CONFIG);
+    } else {
+      placement = penaltyPlacement(award.team, homeShapes, awayShapes, RESTART_PLACEMENT_CONFIG);
+    }
+    for (const t of placement.players) {
+      const p = (t.team === 'home' ? this.homeTeam : this.awayTeam)[t.index];
+      p?.setPosition(t.x, t.y);
+    }
+    this.placeBall(placement.ball.x, placement.ball.y);
+    this.freezeEntities();
+    this.touchTracker.reset();
+    this.pendingRestart = null;
+    this.lastRestartAward = { kind: award.kind, team: award.team };
+    const taker = placement.players.find((t) => t.role === 'kicker' || t.role === 'shooter');
+    this.lastSetPiece = {
+      kind: award.kind,
+      team: award.team,
+      kickerTeam: taker?.team ?? award.team,
+      kickerIndex: taker?.index ?? 0,
+    };
+    this.state = award.kind;
+    this.resetTimer = this.clock.SET_PIECE_MAX_WAIT_MS ?? BALANCE_CONFIG.FOUL.SET_PIECE_MAX_WAIT_MS;
+    return award;
+  }
+
+  /**
+   * Batch B2 (resume on kick): the scene calls this from the kick path after
+   * applying a set-piece kick. Returns true when a set piece resumed.
+   */
+  public notifySetPieceKick(): boolean {
+    if (this.state !== 'FREE_KICK' && this.state !== 'PENALTY') {
+      return false;
+    }
+    this.lastSetPiece = null;
+    this.pendingRestart = null;
+    this.state = 'PLAYING';
+    return true;
+  }
+
   /** RULE-2: per-state placement (THROW_IN/CORNER/GOAL_KICK), then resume play. */
   private applyContextualRestart(): void {
     if (!this.pendingRestart) {
@@ -282,6 +611,9 @@ export class MatchManager {
     if (typeof b.z === 'number') {
       b.z = 0;
     }
+    if (typeof b.vz === 'number') {
+      b.vz = 0;
+    }
     if (typeof b.zTarget === 'number') {
       b.zTarget = 0;
     }
@@ -299,13 +631,17 @@ export class MatchManager {
     }
   }
 
-  /** Places every player at its formation anchor (data-driven, no hardcoded coords). */
+  /**
+   * Places every player at its own-half kickoff anchor (data-driven, no
+   * hardcoded coords). After the halftime swap each team uses the mirrored
+   * anchor side.
+   */
   private resetPositions(): void {
     if (this.ball?.reset) {
       this.ball.reset();
     }
-    const homeAnchors = FormationSystem.anchors(this.formations.home, 'home');
-    const awayAnchors = FormationSystem.anchors(this.formations.away, 'away');
+    const homeAnchors = kickoffAnchors(this.formations.home, this.anchorSideFor('home'));
+    const awayAnchors = kickoffAnchors(this.formations.away, this.anchorSideFor('away'));
     this.homeTeam.forEach((p, i) => {
       const a = homeAnchors[i];
       if (a) {
@@ -328,6 +664,7 @@ export class MatchManager {
     this.goalLatch = false;
     this.touchTracker.reset();
     this.pendingRestart = null;
+    this.lastSetPiece = null;
   }
 
   public restart(): void {
@@ -343,6 +680,13 @@ export class MatchManager {
     this.goalLatch = false;
     this.touchTracker.reset();
     this.pendingRestart = null;
+    this.lastSetPiece = null;
+    this.lastFoulAtMs = -Infinity;
+    this.matchElapsedMs = 0;
+    this.kickoffTeam = 'home';
+    this.halftimeDone = false;
+    this.sidesSwapped = false;
+    this.stats.reset();
     this.resetPositions();
   }
 
@@ -350,3 +694,6 @@ export class MatchManager {
     return this.timeRemaining;
   }
 }
+
+/** Halving divisor for the mid-duration halftime point (arithmetic, not tuning). */
+const HALF_DIVISOR = 2;

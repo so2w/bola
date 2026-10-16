@@ -1,8 +1,19 @@
 import Phaser from 'phaser';
 import { BALANCE_CONFIG } from '../data/balance';
 import { resolveClipFrames, type ClubTeam } from './frameMap';
+import type { GkOverrideClip } from './gkAnim';
 
-type AnimState = 'Idle' | 'Run' | 'Kick';
+type AnimState =
+  | 'Idle'
+  | 'Run'
+  | 'Kick'
+  | 'Tackle'
+  | 'Celebrate'
+  | 'Dive'
+  | 'Claim'
+  | 'Distribute';
+/** Lower-case clip keys (frameMap names) the anim keys are built from. */
+type ClipKey = 'idle' | 'run' | 'kick' | 'tackle' | 'celebrate' | 'dive' | 'claim' | 'distribute';
 type ShotKind = 'KICK' | 'PASS';
 
 /**
@@ -30,13 +41,18 @@ export class Player {
   public sprite: Phaser.GameObjects.Sprite;
   public animState: AnimState = 'Idle';
   public chargeTimer = 0;
-  public maxSpeed = 220;
+  public maxSpeed = BALANCE_CONFIG.PHYSICS.PLAYER_MAX_SPEED;
   public readonly team: ClubTeam;
   private readonly frames?: ReadonlyMap<string, number>;
-  private readonly animKeys: { idle: string; run: string; kick: string };
+  private readonly animKeys: Record<ClipKey, string>;
   private maxCharge = BALANCE_CONFIG.PHYSICS.PLAYER_MAX_CHARGE_MS;
   private kickDuration = BALANCE_CONFIG.PHYSICS.PLAYER_KICK_DURATION_MS;
-  private kickTimer = 0;
+  /**
+   * Phase 4 Batch B: the bounded override window (kick and the new action
+   * clips). Counts down on updateAnimation deltas; expiry always returns the
+   * state machine to Idle/Run — no clip can wedge.
+   */
+  private overrideTimer = 0;
   private isCharging = false;
   private controller?: IPlayerController;
   private shotCallback?: (power: number, facing: Phaser.Math.Vector2, kind?: ShotKind) => void;
@@ -49,6 +65,11 @@ export class Player {
       idle: `player_idle_${this.team}`,
       run: `player_run_${this.team}`,
       kick: `player_kick_${this.team}`,
+      tackle: `player_tackle_${this.team}`,
+      celebrate: `player_celebrate_${this.team}`,
+      dive: `player_dive_${this.team}`,
+      claim: `player_claim_${this.team}`,
+      distribute: `player_distribute_${this.team}`,
     };
     // Kit regression fix (playtest round 2): the sprite is born on the TEAM's
     // idle frame, not frame 0 — frame 0 is always home-idle (red), so any away
@@ -85,18 +106,32 @@ export class Player {
    * away clip missing -> home frames + team tint fallback (PA-1-S3).
    */
   private createAnimations(resolved = resolveClipFrames(this.frames ?? new Map(), this.team)): void {
-    const defs: Array<[string, number[], number, number | undefined]> = [
-      [this.animKeys.idle, resolved.idle, 1, undefined],
-      [this.animKeys.run, resolved.run, 8, -1],
-      [this.animKeys.kick, resolved.kick, 1, undefined],
+    const defs: Array<[string, number[], number, number | undefined, boolean | undefined]> = [
+      [this.animKeys.idle, resolved.idle, 1, undefined, undefined],
+      [this.animKeys.run, resolved.run, 8, -1, undefined],
+      [this.animKeys.kick, resolved.kick, 1, undefined, undefined],
+      [this.animKeys.tackle, resolved.tackle, 1, undefined, undefined],
+      // Celebration: arms-up <-> idle yoyo pair (bounce), looped while the
+      // bounded window runs; the expiry always returns to idle/run.
+      [
+        this.animKeys.celebrate,
+        resolved.celebrate,
+        BALANCE_CONFIG.ANIM.CELEBRATION_FRAME_RATE,
+        -1,
+        true,
+      ],
+      [this.animKeys.dive, resolved.dive, 1, undefined, undefined],
+      [this.animKeys.claim, resolved.claim, 1, undefined, undefined],
+      [this.animKeys.distribute, resolved.distribute, 1, undefined, undefined],
     ];
-    for (const [key, frames, frameRate, repeat] of defs) {
+    for (const [key, frames, frameRate, repeat, yoyo] of defs) {
       if (!this.scene.anims.exists(key)) {
         this.scene.anims.create({
           key,
           frames: frames.map((frame) => ({ key: 'players', frame })),
           frameRate,
           ...(repeat !== undefined ? { repeat } : {}),
+          ...(yoyo !== undefined ? { yoyo } : {}),
         });
       }
     }
@@ -163,6 +198,13 @@ export class Player {
   public lastPassTarget: { x: number; y: number } | null = null;
 
   /**
+   * Phase 4 Batch A: pass power lives on the entity so the surface/session
+   * tuning path (MatchScene.applySpeedAndPassTuning) can adjust it without
+   * touching BALANCE_CONFIG. Config value is the default.
+   */
+  public passPowerPct = BALANCE_CONFIG.INPUT.PASS_POWER_PCT;
+
+  /**
    * MC-1: contextual pass — kicks toward a teammate at pass power.
    */
   public passTo(target: { x: number; y: number }): void {
@@ -175,7 +217,7 @@ export class Player {
     } else {
       facing.setTo(1, 0);
     }
-    this.shootWithPower(BALANCE_CONFIG.INPUT.PASS_POWER_PCT, facing, 'PASS');
+    this.shootWithPower(this.passPowerPct, facing, 'PASS');
   }
 
   private updateCharge(delta: number): void {
@@ -185,17 +227,21 @@ export class Player {
   }
 
   public updateAnimation(delta: number): void {
-    // PA-2: kick window counts down on the preUpdate delta — never scene loop.
-    if (this.kickTimer > 0) {
-      this.kickTimer -= delta;
-      if (this.kickTimer <= 0) {
-        this.animState = this.body.velocity.length() > 0 ? 'Run' : 'Idle';
+    // PA-2 + Batch B: the override window counts down on the preUpdate delta —
+    // never the scene loop. Every action clip (kick, tackle, celebration, GK
+    // clips) is bounded here and always falls back to Idle/Run on expiry.
+    if (this.overrideTimer > 0) {
+      this.overrideTimer -= delta;
+      if (this.overrideTimer <= 0) {
+        this.overrideTimer = 0;
+        this.animState = this.locomotionState();
       }
     }
 
-    if (this.animState === 'Kick') {
-      if (!this.sprite.anims.isPlaying || this.sprite.anims.currentAnim?.key !== this.animKeys.kick) {
-        this.sprite.anims.play(this.animKeys.kick, true);
+    if (this.animState !== 'Idle' && this.animState !== 'Run') {
+      const key = this.animKeys[OVERRIDE_STATE_CLIP[this.animState]];
+      if (!this.sprite.anims.isPlaying || this.sprite.anims.currentAnim?.key !== key) {
+        this.sprite.anims.play(key, true);
       }
       return;
     }
@@ -214,10 +260,59 @@ export class Player {
     }
   }
 
+  private startOverride(state: Exclude<AnimState, 'Idle' | 'Run'>, durationMs: number): void {
+    this.animState = state;
+    this.overrideTimer = durationMs;
+    this.sprite.anims.play(this.animKeys[OVERRIDE_STATE_CLIP[state]], true);
+  }
+
+  /** Idle/Run by current body velocity (override fallback state). */
+  private locomotionState(): AnimState {
+    return this.body.velocity.length() > 0 ? 'Run' : 'Idle';
+  }
+
+  /**
+   * Phase 4 Batch B: slide tackle clip on the pressure/tackle action. No-op
+   * while another action clip is in flight (the window never restarts).
+   */
+  public startTackle(): void {
+    if (this.overrideTimer > 0) {
+      return;
+    }
+    this.startOverride('Tackle', BALANCE_CONFIG.ANIM.TACKLE_DURATION_MS);
+  }
+
+  /**
+   * Phase 4 Batch B: short arms-up celebration bounce (bounded window; the
+   * kickoff hygiene resets it early through resetAnimation()).
+   */
+  public startCelebration(): void {
+    this.startOverride('Celebrate', BALANCE_CONFIG.ANIM.CELEBRATION_DURATION_MS);
+  }
+
+  /**
+   * Phase 4 Batch B: GK clip picked by the keeper FSM. MatchScene re-arms
+   * every frame while the FSM holds the state, so the window only starts
+   * expiring once the state moves on — and it ALWAYS expires (no wedge).
+   */
+  public applyGkClip(clip: GkOverrideClip): void {
+    const durationMs =
+      clip === 'dive'
+        ? BALANCE_CONFIG.GK.DIVE_DURATION_MS
+        : clip === 'claim'
+          ? BALANCE_CONFIG.ANIM.GK_CLAIM_DURATION_MS
+          : BALANCE_CONFIG.ANIM.GK_DISTRIBUTE_DURATION_MS;
+    this.startOverride(clip === 'dive' ? 'Dive' : clip === 'claim' ? 'Claim' : 'Distribute', durationMs);
+  }
+
+  /** Clears any in-flight override clip immediately (kickoff hygiene). */
+  public resetAnimation(): void {
+    this.overrideTimer = 0;
+    this.animState = this.locomotionState();
+  }
+
   private startKick(): void {
-    this.animState = 'Kick';
-    this.kickTimer = this.kickDuration;
-    this.sprite.anims.play(this.animKeys.kick, true);
+    this.startOverride('Kick', this.kickDuration);
   }
 
   private getFacing(): Phaser.Math.Vector2 {
@@ -242,10 +337,26 @@ export class Player {
   }
 
   public shootWithPower(power: number, facing: Phaser.Math.Vector2, kind: ShotKind = 'KICK'): void {
-    if (this.kickTimer > 0) {
+    // Kick spam guard: a new kick may not fire while a kick/tackle clip is in
+    // its window. GK clips (dive/claim/distribute) never block the keeper's
+    // own distribute/kick path (claim -> distribute must release the ball).
+    if (
+      (this.animState === 'Kick' || this.animState === 'Tackle') &&
+      this.overrideTimer > 0
+    ) {
       return;
     }
     this.startKick();
     this.shotCallback?.(Phaser.Math.Clamp(power, 0, 1), facing.clone(), kind);
   }
 }
+
+/** Override states -> the clip key their animation is built from. */
+const OVERRIDE_STATE_CLIP: Record<Exclude<AnimState, 'Idle' | 'Run'>, ClipKey> = {
+  Kick: 'kick',
+  Tackle: 'tackle',
+  Celebrate: 'celebrate',
+  Dive: 'dive',
+  Claim: 'claim',
+  Distribute: 'distribute',
+};

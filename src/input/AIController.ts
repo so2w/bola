@@ -12,6 +12,12 @@ export interface LocomotionCfg extends DribbleFeelCfg {
   IDLE_WANDER_SPEED: number;
 }
 
+/** GK movement profile consumed from BALANCE_CONFIG.GK (Phase 2 closure). */
+export interface GKLocomotionCfg {
+  GK_MAX_SPEED_PX_S: number;
+  GK_ACCEL_PX_S2: number;
+}
+
 let nextPhase = 0;
 /** Golden angle spreads co-targeting players around the wander circle. */
 const GOLDEN_ANGLE = 2.399963229728653;
@@ -29,6 +35,8 @@ const GOLDEN_ANGLE = 2.399963229728653;
  *   wander orbit (per-instance phase) instead of freezing;
  * - action commands that need the body to ARRIVE (DIVE/PRESS/TRACK/CLAIM)
  *   also damp on arrival, but only MOVE/IDLE wander.
+ * - a command speedFactor (recovery sprints, dribble pressure/boost)
+ *   composes multiplicatively on top for every action.
  */
 export class AIController implements IPlayerController {
   private player?: Player;
@@ -36,17 +44,23 @@ export class AIController implements IPlayerController {
   private readonly onAction?: (cmd: AICommand) => void;
   private readonly cfg: LocomotionCfg;
   private readonly wanderPhase: number;
+  private readonly isGK: boolean;
+  private readonly gkCfg: GKLocomotionCfg;
   private elapsedMs = 0;
 
   constructor(
     onAction?: (cmd: AICommand) => void,
     cfg: LocomotionCfg = BALANCE_CONFIG.AI,
     wanderPhase?: number,
+    isGK = false,
+    gkCfg: GKLocomotionCfg = BALANCE_CONFIG.GK,
   ) {
     this.onAction = onAction;
     this.cfg = cfg;
     // Deterministic default: creation order assigns a unique orbit phase.
     this.wanderPhase = wanderPhase ?? nextPhase++ * GOLDEN_ANGLE;
+    this.isGK = isGK;
+    this.gkCfg = gkCfg;
   }
 
   public setCommand(cmd: AICommand | undefined): void {
@@ -95,7 +109,10 @@ export class AIController implements IPlayerController {
     // Carrier feel (fase 4): heading wobble bends the dribble path. It only
     // applies to dribble commands beyond the anchor tolerance, so it never
     // fights the idle wander (wander owns the at-target zone above).
-    let speedFactor = 1;
+    // Living movement: speedFactor composes for EVERY action (recovery
+    // sprints set it on plain MOVE commands); dribble additionally bends
+    // the heading. Absent = full speed (legacy behavior).
+    let speedFactor = cmd.speedFactor ?? 1;
     if (cmd.dribble && dist > this.cfg.ARRIVAL_RADIUS_PX * 0.5) {
       const wob = (wobbleOffsetDeg(this.elapsedMs, this.wanderPhase, this.cfg) * Math.PI) / 180;
       const cos = Math.cos(wob);
@@ -104,16 +121,32 @@ export class AIController implements IPlayerController {
       const ry = dx * sin + dy * cos;
       dx = rx;
       dy = ry;
-      speedFactor = cmd.speedFactor ?? 1;
     }
 
     // Arrival damping: full speed beyond ARRIVAL_RADIUS_PX, linear decay to
     // ARRIVAL_MIN_SPEED_PCT inside it. Dribble pressure/boost composes on top.
-    const maxSpeed = this.player?.maxSpeed ?? BALANCE_CONFIG.PHYSICS.PLAYER_MAX_SPEED;
+    // Phase 2 closure: GK locomotion uses its own profile (GK_MAX_SPEED_PX_S)
+    // so the keeper never moves exactly like a field player; per-frame
+    // velocity change additionally clamps to GK_ACCEL_PX_S2 (accel-limited
+    // keeper vs instant field locomotion).
+    const fieldMax = this.player?.maxSpeed ?? BALANCE_CONFIG.PHYSICS.PLAYER_MAX_SPEED;
+    const maxSpeed = this.isGK ? this.gkCfg.GK_MAX_SPEED_PX_S : fieldMax;
     const scale = Math.min(1, Math.max(len / this.cfg.ARRIVAL_RADIUS_PX, this.cfg.ARRIVAL_MIN_SPEED_PCT));
     const speed = maxSpeed * scale * speedFactor;
     const wlen = Math.hypot(dx, dy);
-    return { vx: (dx / wlen) * speed, vy: (dy / wlen) * speed };
+    const desired = { vx: (dx / wlen) * speed, vy: (dy / wlen) * speed };
+    if (!this.isGK || this.player === undefined) {
+      return desired;
+    }
+    const cur = this.player.body.velocity;
+    const dvx = desired.vx - cur.x;
+    const dvy = desired.vy - cur.y;
+    const dvLen = Math.hypot(dvx, dvy);
+    const maxDv = (this.gkCfg.GK_ACCEL_PX_S2 * dtMs) / 1000;
+    if (dvLen <= maxDv || dvLen === 0) {
+      return desired;
+    }
+    return { vx: cur.x + (dvx / dvLen) * maxDv, vy: cur.y + (dvy / dvLen) * maxDv };
   }
 
   public update(dtMs: number): void {

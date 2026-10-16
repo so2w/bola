@@ -87,17 +87,21 @@ describe('resolveFormation', () => {
 });
 
 describe('resolveMatchFormations (MatchScene init-data params)', () => {
-  it('defaults to 3v3/3v3 when scene receives no init data (no gameplay regression)', () => {
-    expect(resolveMatchFormations(undefined)).toEqual({ home: '3v3', away: '3v3' });
-    expect(resolveMatchFormations({})).toEqual({ home: '3v3', away: '3v3' });
+  it('defaults to 11v11/11v11 when scene receives no init data (Batch B1 shipped default)', () => {
+    expect(resolveMatchFormations(undefined)).toEqual({ home: '11v11', away: '11v11' });
+    expect(resolveMatchFormations({})).toEqual({ home: '11v11', away: '11v11' });
   });
 
-  it('honours explicit formationHome/formationAway', () => {
+  it('honours explicit formationHome/formationAway (3v3/5v5 stay available)', () => {
     expect(resolveMatchFormations({ formationHome: '11v11', formationAway: '11v11' })).toEqual({
       home: '11v11',
       away: '11v11',
     });
-    expect(resolveMatchFormations({ formationHome: '11v11' })).toEqual({ home: '11v11', away: '3v3' });
+    expect(resolveMatchFormations({ formationHome: '3v3' })).toEqual({ home: '3v3', away: '11v11' });
+    expect(resolveMatchFormations({ formationHome: '3v3', formationAway: '5v5' })).toEqual({
+      home: '3v3',
+      away: '5v5',
+    });
   });
 
   it('rejects unknown ids with a descriptive error before spawn (FORM-1 scenario 3)', () => {

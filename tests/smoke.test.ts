@@ -44,11 +44,11 @@ describe('procedural asset pipeline — smoke', () => {
     expect(parseIhdr('ball-shadow.png')).toMatchObject({ width: 16, height: 8, bitDepth: 8, colorType: 6 });
   });
 
-  it('players.png dimensions are whole 32px frames (96x64)', () => {
+  it('players.png dimensions are whole 32px frames (256x64)', () => {
     const ihdr = parseIhdr('players.png');
     expect(ihdr.width % 32).toBe(0);
     expect(ihdr.height % 32).toBe(0);
-    expect([ihdr.width, ihdr.height]).toEqual([96, 64]);
+    expect([ihdr.width, ihdr.height]).toEqual([256, 64]);
   });
 
   it('manifest.json declares files, frame dims and palettes', () => {
@@ -56,7 +56,7 @@ describe('procedural asset pipeline — smoke', () => {
     expect(manifest.files).toEqual(PNGS);
     expect(manifest.spritesheets.players.frameW).toBe(32);
     expect(manifest.spritesheets.players.frameH).toBe(32);
-    expect(manifest.spritesheets.players.frames).toHaveLength(6);
+    expect(manifest.spritesheets.players.frames).toHaveLength(16);
     expect(manifest.palettes.home.shirt).toBe('#d32f2f');
     expect(manifest.palettes.away.shirt).toBe('#1976d2');
     // Manifest image dims must agree with actual IHDR dims for static images.

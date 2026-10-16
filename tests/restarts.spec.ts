@@ -198,15 +198,19 @@ describe('restartPlacement (S2.3)', () => {
   it('THROW_IN: thrower at exit point on touchline, support within configured radius+bound', () => {
     const exit = { x: 500, y: 0 };
     const placement = throwInPlacement(exit, 'home', home, away);
-    expect(placement.ball).toEqual(exit);
+    // Batch 5: the throw mark steps THROW_IN_INSET_PX inside so neither the
+    // thrower nor the ball spawns exactly on the boundary line.
+    const inset = BALANCE_CONFIG.RESTART.THROW_IN_INSET_PX;
+    expect(placement.ball).toEqual({ x: exit.x, y: inset });
     const thrower = placement.players.find((p) => p.team === 'home');
     expect(thrower).toBeDefined();
     expect(thrower!.x).toBe(500);
-    expect(thrower!.y).toBe(0);
+    expect(thrower!.y).toBe(inset);
+    const mark = { x: exit.x, y: inset };
     const support = placement.players.filter((p) => p.team === 'home' && p.index !== thrower!.index);
     expect(support.length).toBe(BALANCE_CONFIG.RESTART.THROW_IN_SUPPORT_COUNT);
     for (const s of support) {
-      const d = Math.hypot(s.x - exit.x, s.y - exit.y);
+      const d = Math.hypot(s.x - mark.x, s.y - mark.y);
       expect(d).toBeLessThanOrEqual(BALANCE_CONFIG.RESTART.THROW_IN_SUPPORT_RADIUS_PX * 1.5);
       expect(s.x).toBeGreaterThanOrEqual(0);
       expect(s.x).toBeLessThanOrEqual(W);
@@ -244,9 +248,14 @@ describe('restartPlacement (S2.3)', () => {
     expect(placement.ball).toEqual({ x: W - BALANCE_CONFIG.RESTART.GOAL_KICK_SPOT_X_PX, y: H / 2 });
   });
 
-  it('FREE_KICK / PENALTY remain documented stubs (out of MVP scope)', () => {
-    expect(() => freeKickPlacement()).toThrow(/stub/i);
-    expect(() => penaltyPlacement()).toThrow(/stub/i);
+  it('FREE_KICK / PENALTY place reachable set pieces (Batch B2, stubs shipped)', () => {
+    const fk = freeKickPlacement({ x: 500, y: 270 }, 'home', home, away);
+    expect(fk.ball).toEqual({ x: 500, y: 270 });
+    expect(fk.players.some((p) => p.role === 'kicker' && p.team === 'home')).toBe(true);
+    const pen = penaltyPlacement('away', home, away);
+    expect(pen.ball.x).toBe(BALANCE_CONFIG.FOUL.PENALTY_SPOT_OFFSET_PX);
+    expect(pen.players.some((p) => p.role === 'shooter' && p.team === 'away')).toBe(true);
+    expect(pen.players.some((p) => p.role === 'gk' && p.team === 'home')).toBe(true);
   });
 });
 
@@ -267,8 +276,10 @@ describe('MatchManager — contextual restart integration (RULE-2)', () => {
       expect(p.sprite.y).toBeGreaterThanOrEqual(0);
       expect(p.sprite.y).toBeLessThanOrEqual(H);
     }
-    // An away player (opponent of last touch) was moved onto the exit point
-    const thrower = away.find((p) => p.sprite.x === 340 && p.sprite.y === H);
+    // An away player (opponent of last touch) was moved onto the throw mark
+    // just inside the touchline (batch 5 inset, not exactly on the line).
+    const inset = BALANCE_CONFIG.RESTART.THROW_IN_INSET_PX;
+    const thrower = away.find((p) => p.sprite.x === 340 && p.sprite.y === H - inset);
     expect(thrower).toBeDefined();
   });
 

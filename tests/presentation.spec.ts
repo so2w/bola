@@ -190,7 +190,7 @@ describe('MatchManager — CONF-1 config-driven clock', () => {
     expect(mgr.kickoffTimer).toBe(1000);
   });
 
-  it('runs a 60s/3x match in ~20 real seconds then hits GAME_OVER (CONF-1 scenario)', () => {
+  it('runs a 60s/3x match in ~20 real seconds then hits RESULTS via FULL_TIME (CONF-1 scenario)', () => {
     const mgr = new MatchManager(SHORT_CLOCK);
     const ball = fakeBallMgr();
     const home = [fakePlayerMgr(), fakePlayerMgr(), fakePlayerMgr()];
@@ -204,11 +204,14 @@ describe('MatchManager — CONF-1 config-driven clock', () => {
     // ~200 real-time steps of 100ms = 20s real = 60 game-seconds at 3x
     for (let i = 0; i < 210; i++) {
       mgr.update(100);
-      if (mgr.state === 'GAME_OVER') {
+      if (mgr.state === 'FULL_TIME' || mgr.state === 'RESULTS') {
         break;
       }
     }
     expect(mgr.getTime()).toBeLessThan(1e-6);
-    expect(mgr.state).toBe('GAME_OVER');
+    expect(mgr.state).toBe('FULL_TIME');
+    // Whistle pause resolves into the terminal panel (Batch B1 default 2000ms).
+    mgr.update(2001);
+    expect(mgr.state).toBe('RESULTS');
   });
 });

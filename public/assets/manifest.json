@@ -27,9 +27,19 @@
         "home-idle",
         "home-run",
         "home-kick",
+        "home-tackle",
+        "home-celebrate",
+        "home-dive",
+        "home-claim",
+        "home-distribute",
         "away-idle",
         "away-run",
-        "away-kick"
+        "away-kick",
+        "away-tackle",
+        "away-celebrate",
+        "away-dive",
+        "away-claim",
+        "away-distribute"
       ]
     }
   },

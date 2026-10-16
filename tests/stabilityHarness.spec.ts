@@ -105,7 +105,7 @@ function simulateMatch(seed: number): MatchResult {
   const trace: string[] = [];
 
   let steps = 0;
-  while (mgr.state !== 'GAME_OVER' && steps < 5000) {
+  while (mgr.state !== 'RESULTS' && steps < 5000) {
     steps++;
 
     if (mgr.state === 'PLAYING') {
@@ -171,8 +171,8 @@ function simulateMatch(seed: number): MatchResult {
     prevState = mgr.state;
   }
 
-  // No soft-lock: the match must have terminated.
-  expect(mgr.state).toBe('GAME_OVER');
+  // No soft-lock: the match must have terminated (Batch B1: RESULTS via FULL_TIME).
+  expect(mgr.state).toBe('RESULTS');
   expect(maxFramesInState).toBeLessThanOrEqual(MAX_STATE_FRAMES);
 
   return {

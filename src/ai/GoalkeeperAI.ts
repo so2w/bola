@@ -35,7 +35,7 @@ export class GoalkeeperAI {
   private readonly rng: Rng;
   private readonly cfg: GKConfig;
 
-  constructor(rng: Rng = mulberry32(1), cfg: GKConfig = BALANCE_CONFIG.GK) {
+  constructor(rng: Rng = mulberry32(BALANCE_CONFIG.RNG.DEFAULT_SEED), cfg: GKConfig = BALANCE_CONFIG.GK) {
     this.rng = rng;
     this.cfg = cfg;
   }

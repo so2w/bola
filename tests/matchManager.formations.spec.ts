@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { MatchManager } from '../src/systems/MatchManager';
-import { FormationSystem } from '../src/match/FormationSystem';
+import { kickoffAnchors } from '../src/match/restartPlacement';
 
 function fakePlayer() {
   return {
@@ -15,13 +15,14 @@ function fakePlayer() {
 }
 
 describe('MatchManager — team arrays + formation anchors', () => {
-  it('resetMatch places every player at its formation anchor (no hardcoded coords)', () => {
+  it('resetMatch places every player at its own-half kickoff anchor (no hardcoded coords)', () => {
     const mgr = new MatchManager();
     // RULE-2: restart() is ignored during GOAL; full-match restart is a GAME_OVER affordance.
     mgr.state = 'GAME_OVER';
     mgr.resetTimer = 0;
-    const homeAnchors = FormationSystem.anchors('3v3', 'home');
-    const awayAnchors = FormationSystem.anchors('3v3', 'away');
+    // Batch 5: kickoff spots clamp midfield leakers to their own half.
+    const homeAnchors = kickoffAnchors('3v3', 'home');
+    const awayAnchors = kickoffAnchors('3v3', 'away');
     const home = homeAnchors.map(() => fakePlayer());
     const away = awayAnchors.map(() => fakePlayer());
     const ball = { reset: vi.fn() };
@@ -42,7 +43,7 @@ describe('MatchManager — team arrays + formation anchors', () => {
   });
 
   it('home FW anchor is not the legacy hardcoded kickoff position (560, 270)', () => {
-    const anchors = FormationSystem.anchors('3v3', 'home');
+    const anchors = kickoffAnchors('3v3', 'home');
     const home = anchors.map(() => fakePlayer());
     const away = anchors.map(() => fakePlayer());
     const mgr = new MatchManager();

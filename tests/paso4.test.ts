@@ -29,6 +29,11 @@ vi.mock('phaser', () => {
       'setScrollFactor',
       'setFillStyle',
       'setPosition',
+      'clear',
+      'lineStyle',
+      'strokeCircle',
+      'fillStyle',
+      'fillTriangle',
     ]) {
       o[m] = vi.fn(function (this: any, v?: unknown) {
         if (m === 'setVisible') {
@@ -51,6 +56,7 @@ vi.mock('phaser', () => {
             zone: vi.fn(() => chain()),
             rectangle: vi.fn(() => chain()),
             container: vi.fn(() => chain()),
+            graphics: vi.fn(() => chain()),
           };
           this.physics = {
             world: { setBounds: vi.fn(), enable: vi.fn() },
@@ -100,6 +106,11 @@ vi.mock('../src/entities/Player', () => ({
     getPower = vi.fn(() => 0);
     isChargingNow = vi.fn(() => false);
     cancelCharge = vi.fn();
+    // Phase 4 Batch B: override clip contract used by the scene.
+    resetAnimation = vi.fn();
+    startTackle = vi.fn();
+    startCelebration = vi.fn();
+    applyGkClip = vi.fn();
     constructor(_scene?: unknown, _x?: number, _y?: number) {}
   },
 }));
@@ -153,6 +164,11 @@ vi.mock('../src/ai/TeamCoordinator', () => ({
   TeamCoordinator: class {
     update = vi.fn(() => new Map());
     tickGK = vi.fn();
+    // Phase 4 Batch B: the scene picks the GK clip from the keeper state.
+    gkState = vi.fn(() => 'POSITION');
+    setTactics = vi.fn();
+    getTactics = vi.fn(() => 'balanced');
+    setSidesSwapped = vi.fn();
     constructor(_side?: string, _formations?: unknown) {}
   },
 }));
@@ -211,8 +227,8 @@ describe('MatchManager.restart (team arrays)', () => {
   });
 });
 
-describe('MatchManager GAME_OVER time zero transition (REQ-GO-1 / R-MGR-1)', () => {
-  it('transitions PLAYING → GAME_OVER when the clock hits zero and never goes negative', () => {
+describe('MatchManager FULL_TIME -> RESULTS time zero transition (REQ-GO-1 / R-MGR-1)', () => {
+  it('transitions PLAYING → FULL_TIME → RESULTS when the clock hits zero and never goes negative', () => {
     const mgr = new MatchManager();
     mgr.state = 'PLAYING';
     mgr.timeRemaining = 1; // 1 game second left
@@ -220,12 +236,16 @@ describe('MatchManager GAME_OVER time zero transition (REQ-GO-1 / R-MGR-1)', () 
     // 334ms real * 3 = 1.002 game seconds → clamped to 0
     mgr.update(334);
 
-    expect(mgr.state).toBe('GAME_OVER');
+    expect(mgr.state).toBe('FULL_TIME');
     expect(mgr.timeRemaining).toBe(0);
 
-    // GAME_OVER is terminal: further updates are no-ops
+    // FULL_TIME whistles into the terminal RESULTS panel after the pause
+    mgr.update(2001);
+    expect(mgr.state).toBe('RESULTS');
+
+    // RESULTS is terminal: further updates are no-ops
     mgr.update(1000);
-    expect(mgr.state).toBe('GAME_OVER');
+    expect(mgr.state).toBe('RESULTS');
     expect(mgr.timeRemaining).toBe(0);
     expect(mgr.getTime()).toBe(0);
   });
@@ -279,7 +299,7 @@ describe('MatchScene Game Over visibility', () => {
       updateAnimation: vi.fn(),
       cancelCharge: vi.fn(),
     };
-    scene.ball = { preUpdate: vi.fn() };
+    scene.ball = { preUpdate: vi.fn(), sprite: { x: 480, y: 270 } };
     scene.clockText = { setText: vi.fn() };
     scene.scoreText = { setText: vi.fn() };
     scene.ai = undefined;
@@ -459,7 +479,7 @@ describe('MatchScene result overlay toggles canPlay', () => {
       updateAnimation: vi.fn(),
       cancelCharge: vi.fn(),
     };
-    scene.ball = { preUpdate: vi.fn() };
+    scene.ball = { preUpdate: vi.fn(), sprite: { x: 480, y: 270 } };
     scene.manager = manager;
     scene.gameOverGroup = gameOverGroup;
     scene.resultOverlayGroup = resultOverlayGroup;

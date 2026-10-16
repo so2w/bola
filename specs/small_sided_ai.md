@@ -20,11 +20,23 @@ Implementar el sistema de selección automática de jugador controlado (`PlayerS
 - **PlayerSelectionSystem Scoring**:
   $$Score = w_1 \cdot \text{distancia} + w_2 \cdot \text{ánguloIntercept} + \text{hysteresisCooldown}$$
   Evitar oscilación constante (*hysteresis*).
+  Engaged (press/chase) resta `ENGAGED_PENALTY`; MatchScene construye los
+  candidatos con `isEngaged` desde los comandos PRESS vigentes.
 - **FootballAI FSM**:
   - `DEFENDING`: Mantener estructura, presionar sólo 1-2 jugadores cercanos.
-  - `ATTACKING`: Buscar línea de pase, abrirse a las bandas.
-  - `BALL_HOLDER`: Evaluar tiro si está en rango; si no, pase o conducción.
+  - `ATTACKING`: Soporte sin balón — ancla + empuje frontal
+    (`AI_SUPPORT_PUSH_PX`) + separación del rival más cercano dentro de
+    `AI_SUPPORT_AVOID_RADIUS_PX`, acotado por `AI_SUPPORT_MAX_SHIFT_PX`.
+    Sin datos de equipo se mantiene el ancla exacta (legado).
+  - `BALL_HOLDER`: Utilidad TIRO > PASE > CONDUCCIÓN. Tiro en
+    `SHOOT_RANGE_PX`; si no, pase vía `choosePassTarget` (mismo cono/rango
+    que pases humanos, potencia `INPUT.PASS_POWER_PCT`) con tendencia
+    `AI_PASS_TENDENCY` y error acotado `AI_PASS_ERROR_PX`; si no hay
+    compañero abierto, conducción.
 - **GoalkeeperAI FSM**: `POSITION` → `TRACK` → `CLAIM` / `DIVE` → `RECOVER`.
+  Tick por frame (nunca dentro de la cadencia 150ms — ver
+  `docs/adr/0002-gk-tick-cadence.md`); locomoción con perfil propio
+  (`GK.GK_MAX_SPEED_PX_S`, `GK.GK_ACCEL_PX_S2`).
 
 ## Criterios de aceptación
 1. `PlayerSelectionSystem` elige determinísticamente al mejor jugador sin oscilar cada frame.
