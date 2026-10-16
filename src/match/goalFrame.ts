@@ -12,6 +12,41 @@ export interface FrameBar {
   h: number;
 }
 
+/** Which painted meta line the ball must cross for a goal. */
+export type GoalSide = 'left' | 'right';
+
+/**
+ * Remediation (goal must cross the linea de meta): the Arcade detection zones
+ * are 40px wide and centered ON the goal line, so an overlap fires while the
+ * ball is still up to ~20px inside the pitch. A goal additionally requires
+ * the ball's x to sit beyond the painted meta line, the y inside the mouth
+ * (posts win ties per POST_BOUNDARY_INCLUSIVE) and the z under the crossbar.
+ * Anything else near the line is TouchTracker byline business (corner/goal
+ * kick), never a goal.
+ */
+export function isGoalCrossing(
+  side: GoalSide,
+  ballX: number,
+  ballY: number,
+  ballZ = 0,
+  frame: GoalFrameConfig = BALANCE_CONFIG.GOAL_FRAME,
+  bands: GoalBandConfig = BALANCE_CONFIG.FEEDBACK,
+): boolean {
+  const goalX = side === 'left' ? frame.LEFT_GOAL_X_PX : frame.RIGHT_GOAL_X_PX;
+  const crossed = side === 'left' ? ballX < goalX : ballX > goalX;
+  if (!crossed) {
+    return false;
+  }
+  const d = Math.abs(ballY - bands.GOAL_MOUTH_CENTER_Y_PX);
+  const insideMouth = bands.POST_BOUNDARY_INCLUSIVE
+    ? d <= bands.GOAL_MOUTH_HALF_HEIGHT_PX
+    : d < bands.GOAL_MOUTH_HALF_HEIGHT_PX;
+  if (!insideMouth) {
+    return false;
+  }
+  const maxZ = (frame as unknown as Record<string, number>).GOAL_MAX_Z_PX ?? 0;
+  return ballZ <= maxZ;
+}
 /** Edge-based net box (x1 < x2, top < bottom). */
 export interface FrameNet {
   x1: number;

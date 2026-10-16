@@ -376,44 +376,21 @@ describe('MatchScene Restart button click (GO-SCREEN-2)', () => {
   });
 });
 
-describe('MatchScene Cancel button (RESULT-1 / REQ-UI-2)', () => {
-  it('Cancel toggles the result overlay open and closed while PLAYING', () => {
-    const { scene, texts, containers } = buildScene();
-    const overlay = containers[1];
-    const cancelBtn = texts[2];
-    const handler = pointerHandler(cancelBtn);
+describe('MatchScene Abandon button (remediation: Cancel -> Abandonar)', () => {
+  it('Abandonar quits to MenuScene with the current settings (any match state)', () => {
+    const { scene, texts } = buildScene();
+    // add.text call order: clock, score, abandon, goTitle, goScore, goRestart, ...
+    const abandonBtn = texts[2];
+    const handler = pointerHandler(abandonBtn);
+    (scene as any).scene = { start: vi.fn() };
 
     (scene.manager as MatchManager).state = 'PLAYING';
-    expect(overlay.visible).toBe(false); // starts hidden
-
     handler();
-    expect(overlay.visible).toBe(true);
+    expect((scene as any).scene.start).toHaveBeenCalledWith('MenuScene', expect.anything());
 
+    (scene.manager as MatchManager).state = 'KICKOFF';
     handler();
-    expect(overlay.visible).toBe(false);
-  });
-});
-
-describe('MatchScene Cancel state guard (verify WARNING-1 resolution)', () => {
-  it('Cancel is ignored unless the match is PLAYING', () => {
-    const { scene, texts, containers } = buildScene();
-    const mgr: MatchManager = scene.manager;
-    const overlay = containers[1];
-    const handler = pointerHandler(texts[2]);
-
-    mgr.state = 'KICKOFF';
-    handler();
-    expect(overlay.visible).toBe(false);
-
-    mgr.state = 'GAME_OVER';
-    handler();
-    expect(overlay.visible).toBe(false); // game-over panel already shows the score
-
-    mgr.state = 'PLAYING';
-    handler();
-    expect(overlay.visible).toBe(true);
-    handler();
-    expect(overlay.visible).toBe(false);
+    expect((scene as any).scene.start).toHaveBeenCalledTimes(2);
   });
 });
 

@@ -13,7 +13,9 @@
 export type ClubTeam = 'home' | 'away';
 export type PlayerClip =
   | 'idle'
+  | 'idle-2'
   | 'run'
+  | 'run-2'
   | 'kick'
   | 'tackle'
   | 'celebrate'
@@ -35,8 +37,9 @@ export function buildFrameMap(manifest: PlayersManifestLike): Map<string, number
 }
 
 export interface ResolvedClips {
+  /** Idle breathes across the idle/idle-2 pair (single frame on legacy sheets). */
   idle: number[];
-  /** Run clip contains ONLY run frames (PA-1-S1). */
+  /** Run clip strides across the run/run-2 pair (PA-1-S1: no kick frames). */
   run: number[];
   kick: number[];
   /** Slide tackle clip (Batch B). */
@@ -66,7 +69,9 @@ export interface ResolvedClips {
  */
 const LEGACY_FRAME_INDEX: Record<PlayerClip, number> = {
   idle: 0,
+  'idle-2': 0,
   run: 1,
+  'run-2': 1,
   kick: 2,
   tackle: 2,
   celebrate: 0,
@@ -96,9 +101,19 @@ export function resolveClipFrames(map: ReadonlyMap<string, number>, team: ClubTe
     // No registry available at all: legacy sheet layout.
     return [LEGACY_FRAME_INDEX[clip]];
   };
+  /**
+   * Remediation (robotic feel): idle/run resolve to frame PAIRS when the
+   * sheet carries the second variation frame; legacy 8-clip sheets collapse
+   * back to a single frame (dedup), so old manifests keep working.
+   */
+  const pickPair = (a: PlayerClip, b: PlayerClip): number[] => {
+    const x = pick(a);
+    const y = pick(b);
+    return y[0] === x[0] ? x : [...x, ...y];
+  };
   return {
-    idle: pick('idle'),
-    run: pick('run'),
+    idle: pickPair('idle', 'idle-2'),
+    run: pickPair('run', 'run-2'),
     kick: pick('kick'),
     tackle: pick('tackle'),
     celebrate: [...pick('celebrate'), ...pick('idle')],

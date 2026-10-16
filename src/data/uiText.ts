@@ -13,6 +13,13 @@ export const UI_TEXT = {
   HUD: {
     /** Toggles the score peek overlay while PLAYING. */
     SCORE_PEEK_LABEL: 'Marcador',
+    /**
+     * Remediation: the top-right button is now a proper abandon affordance
+     * (quit to menu). The old Marcador score-peek toggle collided with PAUSA
+     * and read as a broken CANCELAR — SCORE_PEEK_LABEL stays only for
+     * backward-compat copy tests.
+     */
+    ABANDON_LABEL: 'Abandonar',
     RESULT_TITLE: 'Resultado',
     RESULT_CLOSE: 'Cerrar',
     /** Deprecated GAME_OVER terminal panel (kept for the legacy flow). */

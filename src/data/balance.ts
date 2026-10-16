@@ -60,16 +60,20 @@ export const BALANCE_CONFIG = {
     BALL_SHADOW_ALPHA_MIN: 0.1,
     // Surface seam default: neutral multiplier (future WeatherSystem plugs in).
     SURFACE_NEUTRAL_FRICTION: 1.0,
-    PLAYER_MAX_SPEED: 220,
+    // Remediation (game feel): match pace cut ~16% so carriers can be seen
+    // before the pass. Old value 220.
+    PLAYER_MAX_SPEED: 185,
     PLAYER_DRAG: 0.8,
     PLAYER_MAX_CHARGE_MS: 1000,
     PLAYER_KICK_DURATION_MS: 200,
   },
   AI: {
     TICK_MS: 150,    ANCHOR_TOLERANCE_PX: 40,
-    CAPTURE_RADIUS_PX: 14,
+    CAPTURE_RADIUS_PX: 16,
     POSSESSABLE_Z: 15,
-    CONTROL_RADIUS_PX: 22,
+    // Remediation: carrier keeps the ball at feet longer (old 22) so
+    // dribbling before passing is viable; receptions seal earlier.
+    CONTROL_RADIUS_PX: 26,
     PRESS_COUNT_MAX: 2,
     SHOOT_RANGE_PX: 120,
     // Playtest round 2 (jitter) hysteresis: a ball holder that steps outside
@@ -102,7 +106,8 @@ export const BALANCE_CONFIG = {
     DRIBBLE_PRESSURE_SLOW_PX: 90,
     DRIBBLE_PRESSURE_SLOW_FACTOR: 0.75,
     DRIBBLE_PRESSURE_REF_COUNT: 3,
-    DRIBBLE_OPEN_LANE_BOOST: 1.1,
+    // Remediation: carriers stop sprinting away from the ball (old 1.1).
+    DRIBBLE_OPEN_LANE_BOOST: 1.02,
     DRIBBLE_CURVE_MAX_DEG: 25,
     DRIBBLE_CURVE_RANGE_PX: 160,
     DRIBBLE_CORRIDOR_HALF_WIDTH_PX: 40,
@@ -148,7 +153,8 @@ export const BALANCE_CONFIG = {
     AI_RECOVERY_WINDOW_MS: 1500,
     AI_RECOVERY_COUNT: 2,
     AI_RECOVERY_DEPTH_PX: 60,
-    AI_RECOVERY_SPEED_FACTOR: 1.2,
+    // Remediation: recovery runs stop warping past carriers (old 1.2).
+    AI_RECOVERY_SPEED_FACTOR: 1.05,
     AI_ATTACK_RUN_WINDOW_MS: 1500,
     AI_ATTACK_RUN_COUNT: 2,
     AI_ATTACK_RUN_EXTRA_PUSH_PX: 60,
@@ -163,6 +169,10 @@ export const BALANCE_CONFIG = {
     AI_TRACK_GOAL_SIDE_PX: 24,
     AI_TRACK_RADIUS_PX: 220,
     AI_TRACK_MAX_SHIFT_PX: 70,
+    // Remediation (shot placement): AI aim spreads across the mouth plus a
+    // bounded margin, so corners are reachable and shots can miss the frame
+    // (TouchTracker byline rules then award corner/goal kick as before).
+    SHOT_MISS_MARGIN_PX: 28,
   },
   SELECTION: {
     W1: 1.0,
@@ -177,7 +187,8 @@ export const BALANCE_CONFIG = {
     TRACK_RADIUS_PX: 260,
     CLAIM_RADIUS_PX: 46,
     DIVE_RADIUS_PX: 120,
-    DIVE_TRIGGER_SPEED: 200,
+    // Remediation: slower overall play still triggers visible dives (old 200).
+    DIVE_TRIGGER_SPEED: 180,
     DIVE_DURATION_MS: 400,
     GK_HOLD_MS: 700,
     // Phase 2 closure (GK movement profile): the keeper no longer moves exactly
@@ -185,8 +196,10 @@ export const BALANCE_CONFIG = {
     // velocity change clamps to GK_ACCEL_PX_S2 (see AIController isGK branch and
     // docs/adr/0002-gk-tick-cadence.md). Dive reach stays interceptable: burst
     // speed < BALL_MAX_IMPULSE, accel reaches max in ~150ms.
-    GK_MAX_SPEED_PX_S: 200,
-    GK_ACCEL_PX_S2: 1400,
+    // Remediation pace: keeper top speed follows the field cut (old 200),
+    // accel keeps the ~150ms reach (old 1400).
+    GK_MAX_SPEED_PX_S: 170,
+    GK_ACCEL_PX_S2: 1200,
   },
   // Camera follow (PRES-1): weighting between controlled player and ball,
   // velocity look-ahead, per-frame lerp, per-formation zoom (playtest: 1.15
@@ -210,11 +223,13 @@ export const BALANCE_CONFIG = {
     PASS_CONE_DEG: 45,
     PASS_MAX_RANGE_PX: 260,
     EMPTY_CONE_FALLBACK: 'forward' as 'none' | 'forward',
-    PASS_POWER_PCT: 0.4,
+    // Remediation: passes ~20% slower (old 0.4) so receivers read on screen.
+    PASS_POWER_PCT: 0.32,
     // Playtest round 3 (pass feel): passes are visibly lifted (z bump) and the
     // intended receiver gets a short possession hint (wider capture radius).
     PASS_LIFT_Z: 26,
-    PASS_HINT_MS: 900,
+    // Remediation: more time to see the receiver (old 900).
+    PASS_HINT_MS: 1100,
     // Playtest final (directional passing): the human pass targets by AIM
     // direction — the best receiver inside a cone around the input direction
     // (any heading, wider than the forward-only PASS_CONE_DEG auto cone),
@@ -424,11 +439,12 @@ export const BALANCE_CONFIG = {
     // Live tuning knobs (section 30 "when practical"): passPower and
     // cameraLerp defaults mirror INPUT.PASS_POWER_PCT / CAMERA.LERP —
     // the debug spec locks the mirror so they cannot drift.
+    // Remediation: passPower default follows the feel cut (old 0.4).
     TUNING: {
       KNOBS: [
         { KEY: 'playerSpeed', LABEL: 'player speed', MIN: 0.5, MAX: 1.5, STEP: 0.05, DEFAULT: 1 },
         { KEY: 'ballFriction', LABEL: 'ball friction', MIN: 0.5, MAX: 2, STEP: 0.05, DEFAULT: 1 },
-        { KEY: 'passPower', LABEL: 'pass power', MIN: 0.1, MAX: 0.9, STEP: 0.05, DEFAULT: 0.4 },
+        { KEY: 'passPower', LABEL: 'pass power', MIN: 0.1, MAX: 0.9, STEP: 0.05, DEFAULT: 0.32 },
         { KEY: 'shotPower', LABEL: 'shot power', MIN: 0.5, MAX: 2, STEP: 0.05, DEFAULT: 1 },
         { KEY: 'cameraLerp', LABEL: 'camera lerp', MIN: 0.01, MAX: 0.5, STEP: 0.01, DEFAULT: 0.08 },
       ],
@@ -440,11 +456,14 @@ export const BALANCE_CONFIG = {
   // paints its markings from); the mouth height equals 2x
   // FEEDBACK.GOAL_MOUTH_HALF_HEIGHT_PX so drawn posts sit on the POST bands.
   // The net protrudes outward beyond each goal line.
+  // Remediation: GOAL_MAX_Z_PX is the crossbar height gate — balls crossing
+  // the line above it are not goals.
   GOAL_FRAME: {
     LEFT_GOAL_X_PX: goalGeometry.GOAL_LINE_LEFT_X_PX,
     RIGHT_GOAL_X_PX: goalGeometry.GOAL_LINE_RIGHT_X_PX,
     GOAL_ZONE_WIDTH_PX: goalGeometry.GOAL_ZONE_WIDTH_PX,
     GOAL_ZONE_HEIGHT_PX: goalGeometry.GOAL_ZONE_HEIGHT_PX,
+    GOAL_MAX_Z_PX: 40,
     POST_WIDTH_PX: 6,
     POST_COLOR: 0xffffff,
     POST_ALPHA: 1,
@@ -501,7 +520,8 @@ export const BALANCE_CONFIG = {
   // well inside INTRO_TIMEOUT_MS; any-key/tap skips when SKIPPABLE.
   ENTRANCE: {
     ENTRANCE_Y_OFFSET_PX: 48,
-    ENTRANCE_WALK_SPEED_PX_S: 220,
+    // Remediation pace parity with the field cut (old 220).
+    ENTRANCE_WALK_SPEED_PX_S: 185,
     ENTRANCE_ARRIVE_RADIUS_PX: 14,
     INTRO_TIMEOUT_MS: 6000,
   },
@@ -725,7 +745,8 @@ export const BALANCE_CONFIG = {
     CELEBRATION_DURATION_MS: 1800,
     CELEBRATION_TEAMMATES: 2,
     // Celebration bounce frame rate (arms-up <-> idle yoyo pair).
-    CELEBRATION_FRAME_RATE: 3,
+    // Remediation: snappier bounce (old 3), less robotic.
+    CELEBRATION_FRAME_RATE: 5,
     // GK clip windows: claim outlasts GK.GK_HOLD_MS so the hold pose reads;
     // the scene re-arms every frame while the FSM stays in the state.
     GK_CLAIM_DURATION_MS: 900,
@@ -801,6 +822,15 @@ export const BALANCE_CONFIG = {
     HINT_COLOR: '#ffffff',
     HINT_BG_COLOR: 'rgba(0,0,0,0.5)',
     DEPTH: 10,
+  },
+  // In-match HUD affordances (AGENTS.md section 8: never over the play area —
+  // both buttons live on the top HUD strip next to the clock). ABANDON quits
+  // to the menu (remediation: the old Marcador score-peek toggle was
+  // redundant next to PAUSA and read as a broken CANCELAR).
+  HUD: {
+    ABANDON_BUTTON_X_PX: 936,
+    ABANDON_BUTTON_Y_PX: 24,
+    ABANDON_FONT_SIZE_PX: '18px',
   },
   // In-match pause affordance + overlay (AGENTS.md section 8: the button must
   // never cover the play area — it lives on the top HUD strip next to the

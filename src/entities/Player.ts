@@ -107,7 +107,9 @@ export class Player {
    */
   private createAnimations(resolved = resolveClipFrames(this.frames ?? new Map(), this.team)): void {
     const defs: Array<[string, number[], number, number | undefined, boolean | undefined]> = [
-      [this.animKeys.idle, resolved.idle, 1, undefined, undefined],
+      // Remediation: idle breathes across the idle/idle-2 pair (yoyo), run
+      // strides across the run/run-2 pair — kills the frozen-robot read.
+      [this.animKeys.idle, resolved.idle, 2, -1, true],
       [this.animKeys.run, resolved.run, 8, -1, undefined],
       [this.animKeys.kick, resolved.kick, 1, undefined, undefined],
       [this.animKeys.tackle, resolved.tackle, 1, undefined, undefined],

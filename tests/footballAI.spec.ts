@@ -82,7 +82,7 @@ describe('FootballAI — per-player FSM', () => {
     const ai = new FootballAI(mulberry32(42));
     ai.state = 'BALL_HOLDER';
 
-    // Holder near the right goal (home attacks right): goal at (PITCH_W - 60, 270)
+    // Holder near the right goal (home attacks right): goal at (PITCH_W - 60, spread Y)
     const nearGoal = dfSnap(PITCH_W - 60 - 50, 270);
     const c = ctx({ possessorId: 'home-1', myTeamPossession: true, ball: ball(PITCH_W - 110, 270) });
     const cmd = ai.tick(nearGoal, c);
@@ -90,9 +90,13 @@ describe('FootballAI — per-player FSM', () => {
     expect(cmd.action).toBe('SHOOT');
     expect(cmd.power).toBeGreaterThan(0);
     expect(cmd.power).toBeLessThanOrEqual(1);
-    // Shot aimed at the goal
+    // Shot aimed at the goal: x on the aim line, y spread across the mouth
+    // plus the bounded miss margin (remediation: no auto-center).
     expect(cmd.targetX).toBe(PITCH_W - 60);
-    expect(cmd.targetY).toBe(270);
+    const margin = BALANCE_CONFIG.AI.SHOT_MISS_MARGIN_PX;
+    expect(Math.abs(cmd.targetY - 270)).toBeLessThanOrEqual(
+      BALANCE_CONFIG.FEEDBACK.GOAL_MOUTH_HALF_HEIGHT_PX + margin,
+    );
   });
 
   it('ball holder far from goal dribbles forward (MOVE toward goal)', () => {

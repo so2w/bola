@@ -8,6 +8,8 @@ import { PossessionSystem } from '../match/PossessionSystem';
 import { HumanInputController, type PassContext } from '../input/HumanInputController';
 import { TouchInput } from '../input/TouchInput';
 import { AIController } from '../input/AIController';
+import { aimShotTarget } from '../ai/FootballAI';
+import { mulberry32, type Rng } from '../utils/rng';
 import { TeamCoordinator } from '../ai/TeamCoordinator';
 import { AudioDirector } from '../audio/AudioDirector';
 import { WebAudioSynth } from '../audio/WebAudioSynth';
@@ -22,7 +24,7 @@ import { gkClipForState, isGkOverrideClip } from '../entities/gkAnim';
 import { pickCelebrationIds } from '../match/celebration';
 import { CrowdIntensitySampler } from '../audio/crowdIntensity';
 import { GoalFeedback } from '../match/GoalFeedback';
-import { goalFrameGeometry } from '../match/goalFrame';
+import { goalFrameGeometry, isGoalCrossing } from '../match/goalFrame';
 import { restartControlId, type RestartControlKind } from '../match/restartControl';
 import { FoulBanner } from '../ui/FoulBanner';
 import { resolveFormation, type FormationId } from '../data/formations';
@@ -89,7 +91,12 @@ export class MatchScene extends Phaser.Scene {
   private rightGoal!: Phaser.GameObjects.Zone;
   private gameOverGroup!: Phaser.GameObjects.Container;
   private resultOverlayGroup!: Phaser.GameObjects.Container;
-  private cancelButton?: Phaser.GameObjects.Text;
+  /**
+   * Remediation: the old score-peek toggle (Marcador) is now a proper abandon
+   * affordance — Abandonar quits to the menu. PAUSA owns pausing; this button
+   * owns leaving. One button, one behavior.
+   */
+  private abandonButton?: Phaser.GameObjects.Text;
   private formations: { home: FormationId; away: FormationId } = { home: '11v11', away: '11v11' };
   /** Player → (team, id) for last-touch attribution feeds (RULE-1). */
   private playerMeta = new Map<Player, { team: 'home' | 'away'; id: string }>();
@@ -142,6 +149,11 @@ export class MatchScene extends Phaser.Scene {
   private tacticsLabel?: Phaser.GameObjects.Text;
   /** Batch B2: live set-piece (foul awarded, kick pending) + AI-kick countdown. */
   private setPiece: { timerMs: number; taken: boolean } | null = null;
+  /**
+   * Remediation (shot placement): deterministic seeded stream for the away-AI
+   * set-piece aim spread — corners reachable, misses possible, no Math.random.
+   */
+  private readonly shotRng: Rng = mulberry32(BALANCE_CONFIG.RNG.DEFAULT_SEED);
   /**
    * Playtest final (control handoff): while set, auto-selection is suspended
    * and the human keeps the claimed restart/set-piece taker. Set on own-team
@@ -427,17 +439,24 @@ export class MatchScene extends Phaser.Scene {
     this.netFlash.away.setDepth(9).setVisible(false);
 
     this.physics.add.overlap(this.ball.sprite, this.leftGoal, () => {
-      if (this.manager?.state === 'PLAYING') {
+      // Remediation: the zone is centered ON the line — an overlap alone is
+      // not a goal. The ball must cross the painted meta line (isGoalCrossing);
+      // near-line misses fall through to the TouchTracker byline rules.
+      if (this.manager?.state === 'PLAYING' && this.ball) {
         // Batch 5 (D+E): scoring side follows the halftime side swap.
-        this.lastScoringSide = this.manager.scorerForGoal('left');
-        this.manager.handleGoal(this.lastScoringSide);
+        if (isGoalCrossing('left', this.ball.sprite.x, this.ball.sprite.y, this.ball.z)) {
+          this.lastScoringSide = this.manager.scorerForGoal('left');
+          this.manager.handleGoal(this.lastScoringSide);
+        }
       }
     }, undefined, this);
 
     this.physics.add.overlap(this.ball.sprite, this.rightGoal, () => {
-      if (this.manager?.state === 'PLAYING') {
-        this.lastScoringSide = this.manager.scorerForGoal('right');
-        this.manager.handleGoal(this.lastScoringSide);
+      if (this.manager?.state === 'PLAYING' && this.ball) {
+        if (isGoalCrossing('right', this.ball.sprite.x, this.ball.sprite.y, this.ball.z)) {
+          this.lastScoringSide = this.manager.scorerForGoal('right');
+          this.manager.handleGoal(this.lastScoringSide);
+        }
       }
     }, undefined, this);
 
@@ -446,7 +465,7 @@ export class MatchScene extends Phaser.Scene {
     this.drawGoalFrames();
 
     // HUD — pinned to the screen (scroll+zoom independent) at safe-margin slots:
-    // clock top-left (24,24), score top-center, Cancel top-right (936,24).
+    // clock top-left (24,24), score top-center, Abandon top-right (HUD config).
     this.clockText = this.add.text(24, 24, '03:00', {
       fontFamily: 'monospace',
       fontSize: '24px',
@@ -459,20 +478,23 @@ export class MatchScene extends Phaser.Scene {
       color: '#ffffff',
     }).setOrigin(0.5, 0).setDepth(10);
 
-    // Cancel button to show result overlay (copy from UI_TEXT)
-    this.cancelButton = this.add.text(936, 24, UI_TEXT.HUD.SCORE_PEEK_LABEL, {
-      fontFamily: 'monospace',
-      fontSize: '18px',
-      color: '#ffffff',
-      backgroundColor: '#000000',
-      padding: { left: 8, right: 8, top: 4, bottom: 4 },
-    }).setOrigin(1, 0).setDepth(10).setInteractive();
-    this.cancelButton.on('pointerdown', () => {
-      // Result peek is a PLAYING-state affordance; at GAME_OVER the game-over
-      // panel already shows the final score (verify WARNING-1 resolution).
-      if (this.resultOverlayGroup && this.manager?.state === 'PLAYING') {
-        this.resultOverlayGroup.setVisible(!this.resultOverlayGroup.visible);
-      }
+    // Abandon button (HUD strip top-right): one tap quits to the menu with
+    // the current settings. Geometry + copy from config/UI_TEXT.
+    const HUDC = BALANCE_CONFIG.HUD;
+    this.abandonButton = this.add.text(
+      HUDC.ABANDON_BUTTON_X_PX,
+      HUDC.ABANDON_BUTTON_Y_PX,
+      UI_TEXT.HUD.ABANDON_LABEL,
+      {
+        fontFamily: 'monospace',
+        fontSize: HUDC.ABANDON_FONT_SIZE_PX,
+        color: '#ffffff',
+        backgroundColor: '#000000',
+        padding: { left: 8, right: 8, top: 4, bottom: 4 },
+      },
+    ).setOrigin(1, 0).setDepth(10).setInteractive();
+    this.abandonButton.on('pointerdown', () => {
+      this.scene.start('MenuScene', { settings: this.matchSettings });
     });
 
     // Game Over group
@@ -620,7 +642,7 @@ export class MatchScene extends Phaser.Scene {
     const vh = this.cameras.main.height;
     pinHudObject(this.clockText, 24, 24, this.cameraZoom, vw, vh);
     pinHudObject(this.scoreText, 480, 24, this.cameraZoom, vw, vh);
-    pinHudObject(this.cancelButton, 936, 24, this.cameraZoom, vw, vh);
+    pinHudObject(this.abandonButton, HUDC.ABANDON_BUTTON_X_PX, HUDC.ABANDON_BUTTON_Y_PX, this.cameraZoom, vw, vh);
     pinHudObject(this.gameOverGroup, 480, 270, this.cameraZoom, vw, vh);
     pinHudObject(this.resultOverlayGroup, 480, 270, this.cameraZoom, vw, vh);
     this.halftimeBanner?.pinToScreen(this.cameraZoom, vw, vh);
@@ -1353,6 +1375,8 @@ export class MatchScene extends Phaser.Scene {
    * one synthesized shot at the goal (resume on kick flows through the normal
    * handleAIKick -> wireShots -> notifySetPieceKick path). Home set pieces
    * wait for the human taker; the manager safety timeout covers abandonment.
+   * Remediation: the aim spreads across the mouth (aimShotTarget) instead of
+   * auto-centering — corners are reachable and the shot can miss the frame.
    */
   private updateSetPiece(delta: number): void {
     const state = this.manager?.state;
@@ -1387,7 +1411,12 @@ export class MatchScene extends Phaser.Scene {
     this.handleAIKick(kicker, {
       action: 'SHOOT',
       targetX: goalX,
-      targetY: BALANCE_CONFIG.PHYSICS.PITCH_HEIGHT / 2,
+      targetY: aimShotTarget(
+        this.shotRng,
+        BALANCE_CONFIG.FEEDBACK.GOAL_MOUTH_CENTER_Y_PX,
+        BALANCE_CONFIG.FEEDBACK.GOAL_MOUTH_HALF_HEIGHT_PX,
+        BALANCE_CONFIG.AI.SHOT_MISS_MARGIN_PX,
+      ),
       power: BALANCE_CONFIG.FOUL.SET_PIECE_AI_POWER,
     });
   }

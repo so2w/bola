@@ -15,6 +15,8 @@ export type FieldState = 'DEFENDING' | 'ATTACKING' | 'BALL_HOLDER';
 
 interface AICfg extends DribbleFeelCfg {
   SHOOT_RANGE_PX: number;
+  /** Remediation: bounded vertical aim spread around the mouth (miss margin). */
+  SHOT_MISS_MARGIN_PX: number;
   /**
    * Anti-jitter hysteresis: how long a ball holder keeps the dribble intent
    * after a transient possession-null window (PossessionSystem drops the
@@ -47,6 +49,22 @@ interface AICfg extends DribbleFeelCfg {
 }
 
 const PHYSICS = BALANCE_CONFIG.PHYSICS;
+
+/**
+ * Remediation (shot placement): AI aim spreads across the goal mouth plus a
+ * bounded miss margin, so corner finishes are reachable and shots can miss
+ * the frame entirely (TouchTracker byline rules award corner/goal kick).
+ * Pure and deterministic: uniform in
+ * [center - (half + miss), center + (half + miss)] from the seeded rng.
+ */
+export function aimShotTarget(
+  rng: Rng,
+  centerY: number,
+  halfHeight: number,
+  missMargin: number,
+): number {
+  return centerY + (rng() * 2 - 1) * (halfHeight + missMargin);
+}
 
 /**
  * Per-player football AI (Phaser-free): runs on plain snapshots at the
@@ -122,14 +140,19 @@ export class FootballAI {
   }
 
   private tickHolder(snap: EntitySnapshot, ctx: MatchContext): AICommand {
-    const goalX = ctx.attackDir === 1 ? PHYSICS.PITCH_WIDTH - 60 : 60;
-    const goalY = PHYSICS.PITCH_HEIGHT / 2;
-    const distToGoal = Math.hypot(goalX - snap.x, goalY - snap.y);
+    // Remediation: the aim line sits on shared geometry (no 60px literal —
+    // the offset mirrors FOUL.SET_PIECE_AI_GOAL_OFFSET_PX) and the vertical
+    // aim spreads across the mouth via aimShotTarget (no auto-center).
+    const goalOffset = BALANCE_CONFIG.FOUL.SET_PIECE_AI_GOAL_OFFSET_PX;
+    const goalX = ctx.attackDir === 1 ? PHYSICS.PITCH_WIDTH - goalOffset : goalOffset;
+    const mouthCenter = BALANCE_CONFIG.FEEDBACK.GOAL_MOUTH_CENTER_Y_PX;
+    const mouthHalf = BALANCE_CONFIG.FEEDBACK.GOAL_MOUTH_HALF_HEIGHT_PX;
+    const distToGoal = Math.hypot(goalX - snap.x, mouthCenter - snap.y);
 
     if (distToGoal < this.cfg.SHOOT_RANGE_PX) {
       return {
         targetX: goalX,
-        targetY: goalY,
+        targetY: aimShotTarget(this.rng, mouthCenter, mouthHalf, this.cfg.SHOT_MISS_MARGIN_PX),
         action: 'SHOOT',
         // Deterministic power variation via injected seeded RNG
         power: 0.7 + this.rng() * 0.3,
@@ -151,7 +174,7 @@ export class FootballAI {
     // lives in AIController.
     const opponents = ctx.opponents ?? [];
     const dirX = distToGoal > 0 ? (goalX - snap.x) / distToGoal : 1;
-    const dirY = distToGoal > 0 ? (goalY - snap.y) / distToGoal : 0;
+    const dirY = distToGoal > 0 ? (mouthCenter - snap.y) / distToGoal : 0;
     const pressure = countPressure(snap.x, snap.y, opponents, this.cfg.DRIBBLE_PRESSURE_SLOW_PX);
     const laneOpen = laneIsClear(
       snap.x,
@@ -162,7 +185,7 @@ export class FootballAI {
       this.cfg.DRIBBLE_CORRIDOR_HALF_WIDTH_PX,
     );
     const speedFactor = dribbleSpeedFactor(pressure, laneOpen, this.cfg);
-    const target = curvedGoalTarget(snap.x, snap.y, goalX, goalY, opponents, this.cfg);
+    const target = curvedGoalTarget(snap.x, snap.y, goalX, mouthCenter, opponents, this.cfg);
     return { targetX: target.x, targetY: target.y, action: 'MOVE', dribble: true, speedFactor };
   }
 

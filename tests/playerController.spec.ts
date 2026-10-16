@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import type Phaser from 'phaser';
+import { BALANCE_CONFIG } from '../src/data/balance';
 
 // Mock Phaser before importing modules that import it (same pattern as paso4.test.ts)
 vi.mock('phaser', () => ({
@@ -148,7 +149,7 @@ function makeMockScene() {
   };
 }
 
-const MAX_SPEED = 220;
+const MAX_SPEED = BALANCE_CONFIG.PHYSICS.PLAYER_MAX_SPEED;
 
 describe('HumanInputController behavioral parity (vs legacy Player bindings)', () => {
   it('moves right at max speed when cursor right is down', () => {

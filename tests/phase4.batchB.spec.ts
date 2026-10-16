@@ -66,7 +66,9 @@ const manifest = JSON.parse(
 
 const EXPECTED_CLIPS = [
   'idle',
+  'idle-2',
   'run',
+  'run-2',
   'kick',
   'tackle',
   'celebrate',
@@ -76,9 +78,9 @@ const EXPECTED_CLIPS = [
 ] as const;
 
 describe('Phase 4 Batch B — generator emits the new cartoon clips', () => {
-  it('manifest declares 16 frames: 8 clips x 2 teams, row-major (home row first)', () => {
+  it('manifest declares 20 frames: 10 clips x 2 teams, row-major (home row first)', () => {
     const frames = manifest.spritesheets.players.frames as string[];
-    expect(frames).toHaveLength(16);
+    expect(frames).toHaveLength(20);
     for (const team of ['home', 'away'] as const) {
       EXPECTED_CLIPS.forEach((clip, i) => {
         expect(frames).toContain(`${team}-${clip}`);
@@ -89,10 +91,10 @@ describe('Phase 4 Batch B — generator emits the new cartoon clips', () => {
     }
   });
 
-  it('players.png sheet grew to 256x64 (8 columns of 32px, 2 team rows)', () => {
+  it('players.png sheet grew to 320x64 (10 columns of 32px, 2 team rows)', () => {
     const buf = readFileSync(fileURLToPath(new URL('../public/assets/players.png', import.meta.url)));
     expect(buf.toString('ascii', 12, 16)).toBe('IHDR');
-    expect(buf.readUInt32BE(16)).toBe(256);
+    expect(buf.readUInt32BE(16)).toBe(320);
     expect(buf.readUInt32BE(20)).toBe(64);
   });
 });

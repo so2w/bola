@@ -7,10 +7,10 @@
  *   - ball.png        16x16    cartoon ball: cream base, bold outline, tiny
  *                              pentagon + satellites, specular highlight
  *   - ball-shadow.png 16x8     soft semi-transparent ellipse (Z-axis shadow)
- *   - players.png     256x64   spritesheet, 32x32 frames — big-head cartoon
+ *   - players.png     320x64   spritesheet, 32x32 frames — big-head cartoon
  *                              players (~45% head, bold silhouette outline)
- *                        row 0 = home [Idle, Run, Kick, Tackle, Celebrate, Dive, Claim, Distribute]
- *                        row 1 = away [same 8 clips]
+ *                        row 0 = home [Idle, Idle-2, Run, Run-2, Kick, Tackle, Celebrate, Dive, Claim, Distribute]
+ *                        row 1 = away [same 10 clips]
  *   - manifest.json   single source of truth consumed by BootScene
  *
  * Rendering: every asset is painted at 4x supersampling and downsampled with
@@ -60,6 +60,66 @@ export function goalMarkingGeometry() {
       GOAL_GEOMETRY.GOAL_MOUTH_CENTER_Y_PX + GOAL_GEOMETRY.GOAL_MOUTH_HALF_HEIGHT_PX,
     zoneWidth: GOAL_GEOMETRY.GOAL_ZONE_WIDTH_PX,
     zoneHeight: GOAL_GEOMETRY.GOAL_ZONE_HEIGHT_PX,
+  };
+}
+
+/**
+ * Full pitch-marking geometry the painter uses (final px). Exported for the
+ * remediation lock test — every painted line derives from the shared
+ * goalGeometry.json, so a future regen can never silently drop the penalty
+ * arc, the small box or the corner arcs again.
+ */
+export function pitchMarkingsGeometry() {
+  const cy = PITCH_H / 2;
+  const boxes = [];
+  for (const side of ['L', 'R']) {
+    const lineX = side === 'L' ? GOAL_GEOMETRY.GOAL_LINE_LEFT_X_PX : GOAL_GEOMETRY.GOAL_LINE_RIGHT_X_PX;
+    const inward = side === 'L' ? 1 : -1;
+    const depth = GOAL_GEOMETRY.PENALTY_BOX_DEPTH_PX;
+    const halfHeight = GOAL_GEOMETRY.PENALTY_BOX_HALF_HEIGHT_PX;
+    const smallDepth = GOAL_GEOMETRY.SMALL_BOX_DEPTH_PX;
+    const smallHalfHeight = GOAL_GEOMETRY.SMALL_BOX_HALF_HEIGHT_PX;
+    const spotOffset = GOAL_GEOMETRY.PENALTY_SPOT_OFFSET_PX;
+    const arcR = GOAL_GEOMETRY.PENALTY_ARC_RADIUS_PX;
+    boxes.push({
+      side,
+      lineX,
+      inward,
+      depth,
+      halfHeight,
+      smallDepth,
+      smallHalfHeight,
+      spotOffset,
+      arcR,
+      boxX: side === 'L' ? lineX : lineX - depth,
+      boxY: Math.floor((PITCH_H - halfHeight * 2) / 2),
+      smallX: side === 'L' ? lineX : lineX - smallDepth,
+      smallY: Math.floor((PITCH_H - smallHalfHeight * 2) / 2),
+      spotX: lineX + inward * spotOffset,
+      spotY: cy,
+    });
+  }
+  const corners = [
+    { id: 'TL', cx: FIELD.x, cy: FIELD.y, a0: 0, a1: Math.PI / 2 },
+    { id: 'TR', cx: FIELD.x + FIELD.w, cy: FIELD.y, a0: Math.PI / 2, a1: Math.PI },
+    { id: 'BL', cx: FIELD.x, cy: FIELD.y + FIELD.h, a0: -Math.PI / 2, a1: 0 },
+    { id: 'BR', cx: FIELD.x + FIELD.w, cy: FIELD.y + FIELD.h, a0: Math.PI, a1: (3 * Math.PI) / 2 },
+  ].map((c) => ({ ...c, r: GOAL_GEOMETRY.CORNER_ARC_RADIUS_PX }));
+  return {
+    kinds: [
+      'outer',
+      'halfway',
+      'center-circle',
+      'center-spot',
+      'penalty-box',
+      'small-box',
+      'penalty-spot',
+      'penalty-arc',
+      'corner-arc',
+    ],
+    centerY: cy,
+    boxes,
+    corners,
   };
 }
 
@@ -183,6 +243,15 @@ function paintSegment(P, x1, y1, x2, y2, r, rgb, a = 255) {
   for (let i = 0; i <= steps; i++) {
     const t = i / steps;
     P.disc(x1 + (x2 - x1) * t, y1 + (y2 - y1) * t, r, rgb, a);
+  }
+}
+
+/** Arc from angle a0 to a1 (radians) as a chain of discs. */
+function paintArc(P, cx, cy, r, a0, a1, lw, rgb, a = 255) {
+  const steps = Math.max(8, Math.ceil(r * Math.abs(a1 - a0)));
+  for (let i = 0; i <= steps; i++) {
+    const t = a0 + ((a1 - a0) * i) / steps;
+    P.disc(cx + Math.cos(t) * r, cy + Math.sin(t) * r, lw / 2, rgb, a);
   }
 }
 
@@ -337,29 +406,50 @@ function paintPitch() {
   P.circle(PITCH_W / 2, PITCH_H / 2, 55, lw, WHITE);
   P.disc(PITCH_W / 2, PITCH_H / 2, 4, WHITE);
 
-  // Penalty boxes + goal mouths on both flanks. The penalty box stays a
-  // generator-internal art shape anchored at the shared goal line; the goal
-  // MOUTH marking is painted 1:1 from the shared geometry so the visible
-  // goal frames (posts at the mouth edges) align with the pitch.
+  // Penalty boxes + small boxes + spots + arcs + corner arcs on both
+  // flanks. EVERY size comes from pitchMarkingsGeometry() (shared
+  // goalGeometry.json) — never free-hand literals — so a regen can never
+  // silently drop the arc, the small box or the corners again. The goal
+  // MOUTH ticks stay 1:1 with the shared detection-zone geometry so the
+  // visible frames (posts at the mouth edges) align with the pitch.
   const marking = goalMarkingGeometry();
-  const boxW = 90;
-  const boxH = 220;
-  const boxY = Math.floor((PITCH_H - boxH) / 2);
-  for (const side of ['L', 'R']) {
-    const lineX = side === 'L' ? marking.leftLineX : marking.rightLineX;
-    const inward = side === 'L' ? 1 : -1;
-    const bx = side === 'L' ? lineX : lineX - boxW;
+  const m = pitchMarkingsGeometry();
+  for (const b of m.boxes) {
+    const boxH = b.halfHeight * 2;
+    const smallH = b.smallHalfHeight * 2;
     // penalty box (3 strokes open toward the touchline)
-    P.rect(bx, boxY, boxW, lw, WHITE);
-    P.rect(bx, boxY + boxH - lw, boxW, lw, WHITE);
-    P.rect(side === 'L' ? bx + boxW - lw : bx, boxY, lw, boxH, WHITE);
+    P.rect(b.boxX, b.boxY, b.depth, lw, WHITE);
+    P.rect(b.boxX, b.boxY + boxH - lw, b.depth, lw, WHITE);
+    P.rect(b.side === 'L' ? b.boxX + b.depth - lw : b.boxX, b.boxY, lw, boxH, WHITE);
+    // small box (6-yard: 3 strokes open toward the touchline)
+    P.rect(b.smallX, b.smallY, b.smallDepth, lw, WHITE);
+    P.rect(b.smallX, b.smallY + smallH - lw, b.smallDepth, lw, WHITE);
+    P.rect(b.side === 'L' ? b.smallX + b.smallDepth - lw : b.smallX, b.smallY, lw, smallH, WHITE);
     // penalty spot
-    P.disc(side === 'L' ? lineX + 62 : lineX - 62, PITCH_H / 2, 3, WHITE);
+    P.disc(b.spotX, b.spotY, 3, WHITE);
+    // penalty arc: semicircle bulging toward midfield, painted only outside
+    // the box (the chord hides inside it).
+    const edgeX = b.side === 'L' ? b.boxX + b.depth : b.boxX;
+    const arcSteps = Math.max(16, Math.ceil(b.arcR * Math.PI));
+    for (let i = 0; i <= arcSteps; i++) {
+      const ang =
+        b.side === 'L'
+          ? -Math.PI / 2 + (Math.PI * i) / arcSteps
+          : Math.PI / 2 + (Math.PI * i) / arcSteps;
+      const px = b.spotX + Math.cos(ang) * b.arcR;
+      const py = b.spotY + Math.sin(ang) * b.arcR;
+      const outside = b.side === 'L' ? px >= edgeX : px <= edgeX;
+      if (outside) P.disc(px, py, lw / 2, WHITE);
+    }
     // goal-mouth marking: two horizontal ticks spanning the detection-zone
     // width around the goal line, exactly at the frame's post positions.
     const halfZone = marking.zoneWidth / 2;
-    P.rect(lineX - halfZone, marking.mouthTopY - lw / 2, marking.zoneWidth, lw, WHITE);
-    P.rect(lineX - halfZone, marking.mouthBottomY - lw / 2, marking.zoneWidth, lw, WHITE);
+    P.rect(b.lineX - halfZone, marking.mouthTopY - lw / 2, marking.zoneWidth, lw, WHITE);
+    P.rect(b.lineX - halfZone, marking.mouthBottomY - lw / 2, marking.zoneWidth, lw, WHITE);
+  }
+  // corner quarter-circles, one per FIELD corner.
+  for (const c of m.corners) {
+    paintArc(P, c.cx, c.cy, c.r, c.a0, c.a1, lw, WHITE);
   }
 
   return downsample(hi);
@@ -438,7 +528,18 @@ const PALETTES = {
   away: { shirt: '#1976d2', shorts: '#ffffff', skin: '#f1c27d' },
 };
 
-const FRAME_NAMES = ['idle', 'run', 'kick', 'tackle', 'celebrate', 'dive', 'claim', 'distribute'];
+const FRAME_NAMES = [
+  'idle',
+  'idle-2',
+  'run',
+  'run-2',
+  'kick',
+  'tackle',
+  'celebrate',
+  'dive',
+  'claim',
+  'distribute',
+];
 const FRAME_W = 32;
 const FRAME_H = 32;
 
@@ -479,11 +580,27 @@ function paintPlayerFrame(P, ox, oy, palette, pose) {
       legs: [[13.4, 25, 13.4, 28.2], [18.6, 25, 18.6, 28.2]],
       boots: [[13.9, 29], 0, [18.1, 29], 0],
     },
+    // Remediation (robotic feel): breath variant — slight crouch so the
+    // idle yoyo pair visibly moves at match scale.
+    'idle-2': {
+      headCy: 9.2,
+      arms: [[8.5, 19.2, 2.0], [23.5, 19.2, 2.0]],
+      legs: [[13.4, 25, 13.2, 28.2], [18.6, 25, 18.8, 28.2]],
+      boots: [[13.7, 29], 0, [18.3, 29], 0],
+    },
     run: {
       headCy: 7.8,
       arms: [[7.5, 17, 2.0], [24.5, 20, 2.0]],
       legs: [[14, 25, 9.4, 28.4], [18, 25, 22.6, 27.2]], // wide exaggerated split
       boots: [[9.4, 28.8], 0, [22.6, 27.6], 0],
+    },
+    // Remediation: opposite stride — the run pair alternates legs AND arms
+    // so locomotion reads as strides, not a frozen glide.
+    'run-2': {
+      headCy: 7.8,
+      arms: [[24.5, 17, 2.0], [7.5, 20, 2.0]],
+      legs: [[18, 25, 22.6, 28.4], [14, 25, 9.4, 27.2]],
+      boots: [[22.6, 28.8], 0, [9.4, 27.6], 0],
     },
     kick: {
       headCy: 8.4,
@@ -502,27 +619,32 @@ function paintPlayerFrame(P, ox, oy, palette, pose) {
       boots: [[27.6, 23.6], 1, [25.4, 28.4], 0],
     },
     // Short arms-up celebration bounce (the clip pairs with idle for the
-    // yoyo bounce in Player): both arms raised beside the head.
+    // yoyo bounce in Player): both arms raised high beside the head.
+    // Remediation: wider/higher arms + lifted head so it reads at 16px.
     celebrate: {
-      headCy: 8.4,
-      arms: [[5.5, 6, 2.0], [26.5, 6, 2.0]],
+      headCy: 7.9,
+      arms: [[4.5, 4.5, 2.0], [27.5, 4.5, 2.0]],
       legs: [[13.4, 25, 13.4, 28.2], [18.6, 25, 18.6, 28.2]],
       boots: [[13.9, 29], 0, [18.1, 29], 0],
     },
-    // GK dive: lateral stretch — body low, both arms reaching to one side,
-    // legs trailing the other way.
+    // GK dive: full lateral stretch — body low and horizontal, both arms
+    // reaching past the frame edge, legs trailing straight behind.
+    // Remediation: deeper crouch + further reach so the clip never reads as
+    // a normal run frame at match scale.
     dive: {
-      headCy: 11,
-      torsoY: 21,
-      arms: [[27, 12, 2.0], [26, 17, 2.0]],
-      legs: [[12, 24, 4, 21], [13, 26, 6, 26]],
-      boots: [[4.4, 20.6], 1, [6.4, 26], 0],
+      headCy: 12.5,
+      torsoY: 23.5,
+      cxOff: 1,
+      arms: [[28.5, 10.5, 2.0], [27.5, 16.5, 2.0]],
+      legs: [[12, 24, 2.5, 19.5], [13, 26.5, 4, 28]],
+      boots: [[2.9, 19.1], 1, [4.4, 28], 0],
     },
     // GK claim: hands together in front of the chest holding the ball.
+    // Remediation: bigger ball-in-hands so the hold reads at match scale.
     claim: {
       headCy: 8.4,
-      holdBall: true,
-      arms: [[10, 14.5, 2.0], [22, 14.5, 2.0]],
+      holdBall: 4.4,
+      arms: [[9.5, 14, 2.0], [22.5, 14, 2.0]],
       legs: [[13.4, 25, 13.4, 28.2], [18.6, 25, 18.6, 28.2]],
       boots: [[13.9, 29], 0, [18.1, 29], 0],
     },
@@ -566,11 +688,13 @@ function paintPlayerFrame(P, ox, oy, palette, pose) {
     P.disc(ox + ax, oy + ay, ar, skin);
   }
 
-  // 5b. Claimed ball held between the hands (GK claim pose).
+  // 5b. Claimed ball held between the hands (GK claim pose). holdBall is
+  // the ball radius so poses control readability (claim uses a bigger ball).
   if (p.holdBall) {
-    P.disc(cx, oy + 13.8, 3.6, BALL_INK);
-    P.disc(cx, oy + 13.8, 2.7, BALL_BASE);
-    P.disc(cx, oy + 13.8, 1.0, BLACK);
+    const ballR = typeof p.holdBall === 'number' ? p.holdBall : 3.6;
+    P.disc(cx, oy + 13.8, ballR, BALL_INK);
+    P.disc(cx, oy + 13.8, ballR - 0.9, BALL_BASE);
+    P.disc(cx, oy + 13.8, Math.max(1.0, ballR - 2.6), BLACK);
   }
 
   // 6. Oversized head: outline ring, darker hair cap, skin face.

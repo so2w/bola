@@ -49,24 +49,28 @@ describe('PA-1 buildFrameMap + resolveClipFrames (2.1)', () => {
 
   it('maps manifest names to array indices', () => {
     expect(map.get('home-idle')).toBe(0);
-    expect(map.get('home-run')).toBe(1);
-    expect(map.get('home-kick')).toBe(2);
-    // Phase 4 Batch B: 8 clips per team, home row first — away row starts at 8.
-    expect(map.get('away-idle')).toBe(8);
-    expect(map.get('away-run')).toBe(9);
-    expect(map.get('away-kick')).toBe(10);
+    expect(map.get('home-idle-2')).toBe(1);
+    expect(map.get('home-run')).toBe(2);
+    expect(map.get('home-run-2')).toBe(3);
+    expect(map.get('home-kick')).toBe(4);
+    // Remediation: 10 clips per team, home row first — away row starts at 10.
+    expect(map.get('away-idle')).toBe(10);
+    expect(map.get('away-run')).toBe(12);
+    expect(map.get('away-kick')).toBe(14);
   });
 
   it('PA-1-S1: run clip contains ONLY run frames (no kick)', () => {
     const home = resolveClipFrames(map, 'home');
-    expect(home.run).toEqual([map.get('home-run')]);
+    expect(home.run).toEqual([map.get('home-run'), map.get('home-run-2')]);
+    expect(home.idle).toEqual([map.get('home-idle'), map.get('home-idle-2')]);
     expect(home.kick).toEqual([map.get('home-kick')]);
-    expect(home.idle).toEqual([map.get('home-idle')]);
+    expect(home.idle).not.toContain(map.get('home-kick'));
   });
 
   it('PA-1-S2: away frames preferred, no tint fallback', () => {
     const away = resolveClipFrames(map, 'away');
-    expect(away.run).toEqual([map.get('away-run')]);
+    expect(away.run).toEqual([map.get('away-run'), map.get('away-run-2')]);
+    expect(away.idle).toEqual([map.get('away-idle'), map.get('away-idle-2')]);
     expect(away.needsTint).toBe(false);
   });
 
