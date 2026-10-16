@@ -46,7 +46,9 @@ export class BootScene extends Phaser.Scene {
     });
 
     this.load.once(Phaser.Loader.Events.COMPLETE, () => {
-      this.scene.start('MatchScene');
+      // Settings batch: the match no longer boots cold — the pre-match menu
+      // picks terreno/clima/formación/duración/volumen before JUGAR.
+      this.scene.start('MenuScene');
     });
     this.load.start();
   }

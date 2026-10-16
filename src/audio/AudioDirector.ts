@@ -71,6 +71,31 @@ export class AudioDirector {
     this.adapter = adapter;
   }
 
+  /**
+   * Settings batch: live master volume (menu + pause AJUSTES). Clamps into
+   * [0, 1]; non-finite values are ignored so audio can never be poisoned.
+   * Scales every event through variantConfig and delegates to the synth so
+   * the ambient crowd bed follows the same setting.
+   */
+  public setMasterVolume(volume: number): void {
+    if (!Number.isFinite(volume)) {
+      return;
+    }
+    this.masterVolume = Math.max(0, Math.min(volume, 1));
+    try {
+      (this.synth as { setMasterVolume?: (v: number) => void } | undefined)?.setMasterVolume?.(
+        this.masterVolume,
+      );
+    } catch {
+      // Audio must never break gameplay.
+    }
+  }
+
+  /** Current master volume (settings wiring tests + debug surface). */
+  public getMasterVolume(): number {
+    return this.masterVolume;
+  }
+
   /** Batch B2: attach (or replace) the procedural synthesis fallback. */
   public setSynthAdapter(synth: SoundAdapter): void {
     this.synth = synth;

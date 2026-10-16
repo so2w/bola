@@ -1,5 +1,6 @@
 import type { FormationId } from '../data/formations';
 import { BALANCE_CONFIG } from '../data/balance';
+import { UI_TEXT } from '../data/uiText';
 import { MatchStatsTracker } from '../match/MatchStats';
 import { otherTeam, TouchTracker, type ExitClassification, type TeamSide } from '../match/TouchTracker';
 import {
@@ -446,9 +447,9 @@ export class MatchManager {
     this.state = 'GOAL';
     this.resetTimer = this.clock.GOAL_PAUSE_MS;
 
-    // VFX: ¡GOL!
+    // VFX: goal cry copy from config (UI_TEXT.GOAL_CRY).
     if (this.scene) {
-      const txt = this.scene.add.text(480, 270, '¡GOL!', {
+      const txt = this.scene.add.text(480, 270, UI_TEXT.GOAL_CRY, {
         fontFamily: 'monospace',
         fontSize: '64px',
         color: '#ffffff',

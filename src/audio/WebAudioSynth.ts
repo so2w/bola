@@ -19,6 +19,10 @@ export class WebAudioSynth {
   private crowdStarted = false;
   /** Phase 4 Batch B: the crowd bed's gain node (intensity modulation). */
   private crowdGain: GainNode | null = null;
+  /** Settings batch: live master volume for the bed (events scale upstream). */
+  private masterVolume = BALANCE_CONFIG.AUDIO.MASTER_VOLUME;
+  /** Last intensity level applied to the bed (re-applied on volume change). */
+  private crowdLevel = BALANCE_CONFIG.AUDIO.CROWD_BED.VOLUME;
   private readonly wantedKeys = new Set([
     'sfx_kick',
     'sfx_pass',
@@ -76,7 +80,7 @@ export class WebAudioSynth {
       filter.frequency.value = bed.FREQ_HZ;
       filter.Q.value = bed.Q;
       const gain = ctx.createGain();
-      gain.gain.value = Math.min(1, bed.VOLUME * BALANCE_CONFIG.AUDIO.MASTER_VOLUME);
+      gain.gain.value = Math.min(1, bed.VOLUME * this.masterVolume);
       src.connect(filter);
       filter.connect(gain);
       gain.connect(ctx.destination);
@@ -91,6 +95,20 @@ export class WebAudioSynth {
 
   public isCrowdBedActive(): boolean {
     return this.crowdStarted;
+  }
+
+  /**
+   * Settings batch: live master volume for the ambient bed (one-shot events
+   * are already scaled by AudioDirector before reaching the synth). Re-ramps
+   * the live bed toward the same intensity target under the new master.
+   * Headless-safe: no-op without a running bed.
+   */
+  public setMasterVolume(volume: number): void {
+    if (!Number.isFinite(volume)) {
+      return;
+    }
+    this.masterVolume = Math.max(0, Math.min(volume, 1));
+    this.setCrowdIntensity(this.crowdLevel);
   }
 
   /**
@@ -112,7 +130,8 @@ export class WebAudioSynth {
     try {
       const cd = BALANCE_CONFIG.AUDIO.CROWD_DYNAMICS;
       const clamped = Math.min(Math.max(level, cd.MIN_LEVEL), cd.MAX_LEVEL);
-      const target = Math.min(1, clamped * BALANCE_CONFIG.AUDIO.MASTER_VOLUME);
+      this.crowdLevel = clamped;
+      const target = Math.min(1, clamped * this.masterVolume);
       const g = this.crowdGain.gain;
       const rampMs = target >= g.value ? cd.GAIN_ATTACK_MS : cd.GAIN_RELEASE_MS;
       g.cancelScheduledValues?.(ctx.currentTime);

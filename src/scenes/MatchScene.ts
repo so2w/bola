@@ -31,8 +31,17 @@ import { aimsIntoOwnHalf, applyKickoffGracePowerCap, canApplyKick, gateKickComma
 import { BallCaptureSystem } from '../match/BallCaptureSystem';
 import { ControlledIndicatorModel, ControlledPlayerIndicator } from '../ui/ControlledIndicator';
 import { resolveMatchFormations, type MatchSceneInitData } from '../match/resolveFormations';
+import {
+  defaultMatchSettings,
+  resolveClockSeconds,
+  resolveMatchSettings,
+  type MatchSettings,
+} from '../match/settingsModel';
+import { canPauseMatch, PauseMenuModel, type PauseAction, type PauseAdjustChange, type PauseRow } from '../match/pauseState';
 import { entranceStarts } from '../match/EntranceSystem';
-import { WeatherSystem } from '../match/WeatherSystem';
+import { WeatherSystem, DEFAULT_WEATHER_CONFIG } from '../match/WeatherSystem';
+import { PauseOverlay } from '../ui/PauseOverlay';
+import { UI_TEXT } from '../data/uiText';
 import { DebugTuning } from '../debug/DebugTuning';
 import { buildDebugPayload, formatDebugPayload } from '../debug/DebugMonitor';
 import { HalftimeBanner, halftimeBannerData } from '../ui/HalftimeBanner';
@@ -154,6 +163,18 @@ export class MatchScene extends Phaser.Scene {
   /** Version of the tuning values last written into entities/camera. */
   private lastTuningVersion = -1;
   /**
+   * Settings/pause batch: chosen match settings (session-only — carried by
+   * scene data from MenuScene, honored by every restart path; persistence is
+   * a Phase 6 SaveGame OPEN QUESTION).
+   */
+  private matchSettings: MatchSettings = defaultMatchSettings();
+  /** Settings/pause batch: scene-level pause (gating, NOT a manager state). */
+  private paused = false;
+  private pauseMenu?: PauseMenuModel;
+  private pauseOverlay?: PauseOverlay;
+  /** On-screen PAUSA affordance on the top HUD strip (Esc equivalent). */
+  private pauseButton?: Phaser.GameObjects.Text;
+  /**
    * Phase 4 Batch B (section 22 layer 3): dynamic crowd bed intensity —
    * sampled at a low cadence, one gain write per sample (never per frame).
    */
@@ -167,9 +188,12 @@ export class MatchScene extends Phaser.Scene {
    * FORM-1: formations come from scene init data (formationHome/formationAway),
    * defaulted and validated BEFORE any entity spawns. Batch B1 ships 11v11 by
    * default; explicit 3v3/5v5 params stay available for tests and sandbox.
+   * Settings batch: surface/weather/duration/volume resolve fail-fast here
+   * (same convention) so create() can wire them into every system.
    */
   init(data?: MatchSceneInitData): void {
     this.formations = resolveMatchFormations(data);
+    this.matchSettings = resolveMatchSettings(data);
   }
 
   create(): void {
@@ -178,8 +202,13 @@ export class MatchScene extends Phaser.Scene {
 
     // Phase 4 Batch A: surface/weather modifiers from config (section 13)
     // plus cheap pitch visual evolution (flat rects only — section 3 budget).
-    // Surface level comes from config for now; stadium evolution is Phase 6.
-    this.weatherSystem = new WeatherSystem();
+    // Settings batch: surface/weather come from the pre-match menu via scene
+    // init data (defaults preserve the old hardcoded behavior bit-for-bit).
+    this.weatherSystem = new WeatherSystem(
+      DEFAULT_WEATHER_CONFIG,
+      this.matchSettings.surface,
+      this.matchSettings.weather,
+    );
     this.applySurfaceVisuals();
 
     // World bounds for Arcade physics
@@ -255,14 +284,23 @@ export class MatchScene extends Phaser.Scene {
     this.touchInput.attach(this, this.player);
 
     // Systems
-    this.manager = new MatchManager();
+    // Settings batch: the clock honors the chosen real duration (3 or 5
+    // minutes, section 7) — every other value still comes from MATCH config.
+    this.manager = new MatchManager({
+      ...BALANCE_CONFIG.MATCH,
+      TIME_REMAINING_GAME_SECONDS: resolveClockSeconds(this.matchSettings.durationMinutes),
+    });
     this.manager.bind(this, this.ball, this.homeTeam, this.awayTeam, this.formations);
     // Batch A (INTRO): both teams start off-pitch and walk to kickoff spots.
     this.beginEntrance();
     // Batch A: any-key/tap skips the entrance (config flag enforced inside).
     // Batch C: the same first gesture unlocks the ambient crowd bed inside
     // the input handler path (autoplay-policy safe; headless no-op).
+    // Settings/pause batch: ignored while paused — pause owns the keyboard.
     this.input.keyboard?.on('keydown', () => {
+      if (this.paused) {
+        return;
+      }
       this.manager?.skipIntro();
       this.audio?.startCrowdBed();
     });
@@ -270,6 +308,9 @@ export class MatchScene extends Phaser.Scene {
     (this.input as unknown as { on?: (ev: string, cb: () => void) => void }).on?.(
       'pointerdown',
       () => {
+        if (this.paused) {
+          return;
+        }
         this.manager?.skipIntro();
         this.audio?.startCrowdBed();
       },
@@ -302,6 +343,9 @@ export class MatchScene extends Phaser.Scene {
     // wired events sound with zero audio files. Asset files always win.
     // WebAudioSynth is lazy + headless-guarded — safe to attach everywhere.
     this.audio.setSynthAdapter(new WebAudioSynth());
+    // Settings batch: master volume from the pre-match menu (pause AJUSTES
+    // re-applies it live).
+    this.audio.setMasterVolume(this.matchSettings.volume);
     this.selectionSystem = new PlayerSelectionSystem();
     this.possession = new PossessionSystem();
     this.ballCapture = new BallCaptureSystem();
@@ -415,8 +459,8 @@ export class MatchScene extends Phaser.Scene {
       color: '#ffffff',
     }).setOrigin(0.5, 0).setDepth(10);
 
-    // Cancel button to show result overlay
-    this.cancelButton = this.add.text(936, 24, 'Cancel', {
+    // Cancel button to show result overlay (copy from UI_TEXT)
+    this.cancelButton = this.add.text(936, 24, UI_TEXT.HUD.SCORE_PEEK_LABEL, {
       fontFamily: 'monospace',
       fontSize: '18px',
       color: '#ffffff',
@@ -434,7 +478,7 @@ export class MatchScene extends Phaser.Scene {
     // Game Over group
     this.gameOverGroup = this.add.container(480, 270).setDepth(30);
     const goBg = this.add.rectangle(0, 0, 600, 240, 0x000000, 0.7).setOrigin(0.5);
-    const goTitle = this.add.text(0, -60, 'GAME OVER', {
+    const goTitle = this.add.text(0, -60, UI_TEXT.HUD.GAME_OVER_TITLE, {
       fontFamily: 'monospace',
       fontSize: '48px',
       color: '#ffffff',
@@ -444,7 +488,7 @@ export class MatchScene extends Phaser.Scene {
       fontSize: '36px',
       color: '#ffffff',
     }).setOrigin(0.5);
-    const goRestart = this.add.text(0, 60, 'Restart (R)', {
+    const goRestart = this.add.text(0, 60, UI_TEXT.HUD.RESTART_KEY_HINT, {
       fontFamily: 'monospace',
       fontSize: '24px',
       color: '#ffff00',
@@ -462,7 +506,7 @@ export class MatchScene extends Phaser.Scene {
     // Result overlay group
     this.resultOverlayGroup = this.add.container(480, 270).setDepth(25);
     const roBg = this.add.rectangle(0, 0, 400, 200, 0x000000, 0.8).setOrigin(0.5);
-    const roTitle = this.add.text(0, -60, 'Resultado', {
+    const roTitle = this.add.text(0, -60, UI_TEXT.HUD.RESULT_TITLE, {
       fontFamily: 'monospace',
       fontSize: '32px',
       color: '#ffffff',
@@ -472,7 +516,7 @@ export class MatchScene extends Phaser.Scene {
       fontSize: '40px',
       color: '#ffffff',
     }).setOrigin(0.5);
-    const roClose = this.add.text(0, 70, 'Cerrar', {
+    const roClose = this.add.text(0, 70, UI_TEXT.HUD.RESULT_CLOSE, {
       fontFamily: 'monospace',
       fontSize: '22px',
       color: '#ffff00',
@@ -598,6 +642,43 @@ export class MatchScene extends Phaser.Scene {
     // the large touch zones never shift with camera scroll/zoom.
     this.touchInput?.pinWidgets(this.cameraZoom, vw, vh);
 
+    // Settings/pause batch — created after every gameplay HUD/banner (their
+    // creation order is locked by scene tests) but BEFORE the debug overlay
+    // (which stays the LAST add.text by its documented invariant):
+    //   - on-screen PAUSA button on the top HUD strip (never over the play
+    //     area, section 8) + Esc toggle;
+    //   - pause overlay (banner pattern) sharing the PauseMenuModel with the
+    //     keyboard handlers.
+    const P = BALANCE_CONFIG.PAUSE;
+    this.pauseButton = this.add
+      .text(P.BUTTON_X_PX, P.BUTTON_Y_PX, UI_TEXT.HUD.PAUSE_BUTTON, {
+        fontFamily: 'monospace',
+        fontSize: P.BUTTON_FONT_SIZE_PX,
+        color: P.BUTTON_TEXT_COLOR,
+        backgroundColor: P.BUTTON_BG_COLOR,
+        padding: P.BUTTON_PADDING,
+      })
+      .setOrigin(0, 0)
+      .setDepth(10)
+      .setInteractive();
+    this.pauseButton.on('pointerdown', () => this.togglePause());
+    pinHudObject(this.pauseButton, P.BUTTON_X_PX, P.BUTTON_Y_PX, this.cameraZoom, vw, vh);
+
+    this.pauseMenu = new PauseMenuModel(this.matchSettings);
+    this.pauseOverlay = new PauseOverlay(this, P, {
+      onRowTap: (row) => this.onPauseRowTap(row),
+    });
+    this.pauseOverlay.pinToScreen(this.cameraZoom, vw, vh);
+
+    this.input.keyboard?.on('keydown-ESC', () => this.togglePause());
+    // Pause-menu keyboard navigation — only while the pause overlay owns
+    // the input (never shadows the gameplay bindings above).
+    this.input.keyboard?.on('keydown-UP', () => this.pauseNavigate(-1));
+    this.input.keyboard?.on('keydown-DOWN', () => this.pauseNavigate(1));
+    this.input.keyboard?.on('keydown-LEFT', () => this.pauseAdjust(-1));
+    this.input.keyboard?.on('keydown-RIGHT', () => this.pauseAdjust(1));
+    this.input.keyboard?.on('keydown-ENTER', () => this.pauseConfirm());
+
     // Phase 4 Batch A (section 30): debug overlay — created LAST so no
     // existing text creation index shifts, hidden by default, every layout
     // value/key from DEBUG config. Session-only tuning keys act only while
@@ -635,6 +716,12 @@ export class MatchScene extends Phaser.Scene {
 
   update(time: number, delta: number): void {
     this.currentTimeMs = time;
+    // Settings/pause batch: while paused NOTHING updates — no manager tick
+    // (clocks/timers freeze), no AI, no controllers, no frame-time stats.
+    // Resume continues from the exact same state (no wedge by construction).
+    if (this.paused) {
+      return;
+    }
     // Phase 4 Batch A: re-apply live tuning only when a knob changed
     // (version-gated — no per-frame writes in the hot path).
     if (this.debugTuning.version !== this.lastTuningVersion) {
@@ -1520,8 +1607,142 @@ export class MatchScene extends Phaser.Scene {
     return `${TC.LABEL_PREFIX}: ${label} (${TC.HINT_KEY})`;
   }
 
+  // -------------------------------------------------------------------------
+  // Settings/pause batch: scene-level pause (gating, never a manager state).
+  // -------------------------------------------------------------------------
+
+  /** Esc / PAUSA button toggle. Terminal states reject pausing (results is final). */
+  public togglePause(): void {
+    if (!this.paused && !canPauseMatch(this.manager?.state)) {
+      return;
+    }
+    this.setPaused(!this.paused);
+  }
+
+  public get isPaused(): boolean {
+    return this.paused;
+  }
+
+  private setPaused(paused: boolean): void {
+    if (this.paused === paused) {
+      return;
+    }
+    this.paused = paused;
+    if (paused) {
+      // A charge held across the pause never resumes: cancel it so a later
+      // key release cannot fire a stale shot the moment we unpause.
+      this.player?.cancelCharge();
+      this.pauseMenu = new PauseMenuModel(this.matchSettings);
+      this.pauseOverlay?.show(this.pauseMenu);
+    } else {
+      this.pauseOverlay?.hide();
+    }
+  }
+
+  /** Pause-menu keyboard navigation (only while the overlay owns the input). */
+  private pauseNavigate(delta: number): void {
+    if (!this.paused || !this.pauseMenu) {
+      return;
+    }
+    this.pauseMenu.move(delta);
+    this.pauseOverlay?.render(this.pauseMenu);
+  }
+
+  /** Pause-menu live adjustment (volume/weather apply immediately). */
+  private pauseAdjust(delta: number): void {
+    if (!this.paused || !this.pauseMenu) {
+      return;
+    }
+    this.applyPauseAdjust(this.pauseMenu.adjust(delta));
+    this.pauseOverlay?.render(this.pauseMenu);
+  }
+
+  /** Pause-menu Enter (confirm the selected row). */
+  private pauseConfirm(): void {
+    if (!this.paused || !this.pauseMenu) {
+      return;
+    }
+    this.handlePauseAction(this.pauseMenu.confirm());
+  }
+
+  /** Overlay row tap: move the cursor to the row, then confirm it. */
+  private onPauseRowTap(row: PauseRow): void {
+    if (!this.paused || !this.pauseMenu) {
+      return;
+    }
+    const rows = this.pauseMenu.rows();
+    const index = rows.indexOf(row);
+    if (index >= 0) {
+      this.pauseMenu.cursor = index;
+    }
+    this.handlePauseAction(this.pauseMenu.confirm());
+  }
+
+  /** Executes a pause-menu action (scene-side effects only). */
+  private handlePauseAction(action: PauseAction): void {
+    const menu = this.pauseMenu;
+    if (!this.paused || !menu) {
+      return;
+    }
+    switch (action) {
+      case 'resume':
+        this.setPaused(false);
+        return;
+      case 'restart':
+        this.setPaused(false);
+        this.manager?.restartToIntro();
+        this.foulBanner?.hide();
+        this.setPiece = null;
+        this.beginEntrance();
+        return;
+      case 'settings':
+        menu.openSettings();
+        this.pauseOverlay?.render(menu);
+        return;
+      case 'back':
+        menu.closeSettings();
+        this.pauseOverlay?.render(menu);
+        return;
+      case 'quit':
+        this.setPaused(false);
+        this.scene.start('MenuScene', { settings: this.matchSettings });
+        return;
+      default:
+        // null: a value row cycled via confirm — repaint only.
+        this.pauseOverlay?.render(menu);
+    }
+  }
+
+  /**
+   * Applies a live pause-settings change: volume reaches AudioDirector (and
+   * the synth bed) immediately; weather recomposes the modifiers with the
+   * SAME pre-match surface and re-applies sprint through the single speed
+   * path (section 13 — terreno/formación stay pre-match only).
+   */
+  private applyPauseAdjust(change: PauseAdjustChange | null): void {
+    if (!change) {
+      return;
+    }
+    if (change.volume !== undefined) {
+      this.matchSettings.volume = change.volume;
+      this.audio?.setMasterVolume(change.volume);
+    }
+    if (change.weather !== undefined) {
+      this.matchSettings.weather = change.weather;
+      this.weatherSystem = new WeatherSystem(
+        DEFAULT_WEATHER_CONFIG,
+        this.matchSettings.surface,
+        change.weather,
+      );
+      this.applySpeedAndPassTuning();
+    }
+  }
+
   /** Batch B1: apply a preset to both coordinators + refresh the HUD label. */
   private applyTactics(id: TacticsId): void {
+    if (this.paused) {
+      return;
+    }
     this.tacticsId = id;
     this.coordinatorHome?.setTactics(id);
     this.coordinatorAway?.setTactics(id);
@@ -1627,6 +1848,9 @@ export class MatchScene extends Phaser.Scene {
    * wrong half.
    */
   private handleAIKick(p: Player, cmd: AICommand): void {
+    if (this.paused) {
+      return;
+    }
     if (cmd.action !== 'SHOOT' && cmd.action !== 'PASS' && cmd.action !== 'DISTRIBUTE') {
       return;
     }
@@ -1680,6 +1904,12 @@ export class MatchScene extends Phaser.Scene {
 
   private wireShots(p: Player): void {
     p.onShot((power, facing, cbKind) => {
+      // Settings/pause batch: while paused the match state stays PLAYING, so
+      // the state gate below would pass — the pause gate is mandatory here
+      // (single choke point for human AND AI kick paths).
+      if (this.paused) {
+        return;
+      }
       // Phase 4 Batch A: live shot-power tuning knob (session-only, section
       // 30) — clamped so a debug knob can never break the kick contract.
       const tunedPower = Phaser.Math.Clamp(

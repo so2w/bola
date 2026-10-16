@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import { BootScene } from './scenes/BootScene';
+import { MenuScene } from './scenes/MenuScene';
 import { MatchScene } from './scenes/MatchScene';
 
 new Phaser.Game({
@@ -16,5 +17,5 @@ new Phaser.Game({
     height: 540,
     parent: 'game',
   },
-  scene: [BootScene, MatchScene],
+  scene: [BootScene, MenuScene, MatchScene],
 });

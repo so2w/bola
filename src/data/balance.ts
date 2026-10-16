@@ -4,6 +4,7 @@
 // drift apart (tests/goalGeometry.spec.ts locks the contract).
 import goalGeometry from './goalGeometry.json';
 import type { PitchQuality, WeatherType } from '../match/WeatherSystem';
+import type { FormationId } from './formations';
 
 export const BALANCE_CONFIG = {
   MATCH: {
@@ -514,7 +515,7 @@ export const BALANCE_CONFIG = {
     BG_COLOR: 0x000000,
     BG_ALPHA: 0.85,
     FONT_FAMILY: 'monospace',
-    TITLE_TEXT: 'HALFTIME',
+    TITLE_TEXT: 'MEDIO TIEMPO',
     TITLE_FONT_SIZE_PX: '36px',
     TITLE_Y_PX: 130,
     TITLE_ORIGIN_Y: 0.5,
@@ -524,13 +525,13 @@ export const BALANCE_CONFIG = {
     SCORE_PLACEHOLDER: '0 - 0',
     SCORE_SEPARATOR: ' - ',
     GOALS_ABBR: 'G',
-    SHOTS_ABBR: 'S',
+    SHOTS_ABBR: 'T',
     PASSES_ABBR: 'P',
     BODY_FONT_SIZE_PX: '18px',
-    SECOND_HALF_NOTE_TEXT: 'Second half — sides swapped',
+    SECOND_HALF_NOTE_TEXT: 'Segundo tiempo — lados cambiados',
     NOTE_Y_PX: 250,
-    HOME_LABEL: 'HOME',
-    AWAY_LABEL: 'AWAY',
+    HOME_LABEL: 'LOCAL',
+    AWAY_LABEL: 'VISITANTE',
     HOME_LINE_Y_PX: 285,
     AWAY_LINE_Y_PX: 310,
     BUTTON_FONT_SIZE_PX: '22px',
@@ -595,7 +596,7 @@ export const BALANCE_CONFIG = {
     BG_COLOR: 0x000000,
     BG_ALPHA: 0.88,
     FONT_FAMILY: 'monospace',
-    TITLE_TEXT: 'FULL TIME',
+    TITLE_TEXT: 'FINAL',
     TITLE_FONT_SIZE_PX: '36px',
     TITLE_Y_PX: 120,
     TITLE_ORIGIN_Y: 0.5,
@@ -605,13 +606,13 @@ export const BALANCE_CONFIG = {
     SCORE_PLACEHOLDER: '0 - 0',
     SCORE_SEPARATOR: ' - ',
     GOALS_ABBR: 'G',
-    SHOTS_ABBR: 'S',
+    SHOTS_ABBR: 'T',
     PASSES_ABBR: 'P',
     BODY_FONT_SIZE_PX: '18px',
     NOTE_TEXT: 'Partido completo',
     NOTE_Y_PX: 240,
-    HOME_LABEL: 'HOME',
-    AWAY_LABEL: 'AWAY',
+    HOME_LABEL: 'LOCAL',
+    AWAY_LABEL: 'VISITANTE',
     HOME_LINE_Y_PX: 275,
     AWAY_LINE_Y_PX: 300,
     BUTTON_FONT_SIZE_PX: '22px',
@@ -755,6 +756,85 @@ export const BALANCE_CONFIG = {
     BOB_AMPLITUDE_PX: 4,
     BOB_PERIOD_MS: 800,
     DEPTH: 15,
+  },
+  // Settings/pause/Spanish-UI batch (AGENTS.md sections 7, 8, 34): pre-match
+  // option orders + defaults. Every list is the single source the menu model
+  // reads; defaults MUST mirror the previous hardcoded behavior so a scene
+  // started without init data is bit-identical to the old boot.
+  // Session-only: persisting settings per profile is a Phase 6 SaveGame
+  // OPEN QUESTION (documented in specs/settings_menus_spanish_ui.md).
+  SETTINGS: {
+    SURFACE_ORDER: ['DIRT', 'IRREGULAR_GRASS', 'REGULAR_GRASS', 'PROFESSIONAL_GRASS'] as PitchQuality[],
+    WEATHER_ORDER: ['CLEAR_DAY', 'RAIN', 'SNOW', 'HEAT'] as WeatherType[],
+    FORMATION_ORDER: ['3v3', '5v5', '11v11'] as FormationId[],
+    DURATION_OPTIONS_MINUTES: [3, 5],
+    VOLUME_STEPS: [0, 0.25, 0.5, 0.75, 1],
+    DEFAULTS: {
+      SURFACE_INDEX: 2, // REGULAR_GRASS — WeatherSystem default (zero change)
+      WEATHER_INDEX: 0, // CLEAR_DAY — WEATHER.DEFAULT_TYPE
+      FORMATION_INDEX: 2, // 11v11 — Batch B1 shipped default
+      DURATION_INDEX: 0, // 3 real minutes — MATCH.DURATION_REAL_MINUTES
+      VOLUME_INDEX: 4, // 1.0 — AUDIO.MASTER_VOLUME
+    },
+  },
+  // Pre-match menu layout (section 34: readable, large touch rows). Geometry
+  // and styles only — copy lives in src/data/uiText.ts.
+  MENU: {
+    FONT_FAMILY: 'monospace',
+    TITLE_X_PX: 480,
+    TITLE_Y_PX: 64,
+    TITLE_FONT_SIZE_PX: '40px',
+    TITLE_COLOR: '#ffe135',
+    ROW_X_PX: 480,
+    ROW_Y_START_PX: 150,
+    ROW_SPACING_PX: 56,
+    ROW_FONT_SIZE_PX: '22px',
+    ROW_COLOR: '#ffffff',
+    SELECTED_COLOR: '#ffe135',
+    PLAY_FONT_SIZE_PX: '30px',
+    PLAY_TEXT_COLOR: '#ffe135',
+    PLAY_BG_COLOR: '#000000',
+    BUTTON_PADDING: { left: 16, right: 16, top: 8, bottom: 8 },
+    CURSOR_PREFIX: '» ',
+    HINT_Y_PX: 506,
+    HINT_FONT_SIZE_PX: '14px',
+    HINT_COLOR: '#ffffff',
+    HINT_BG_COLOR: 'rgba(0,0,0,0.5)',
+    DEPTH: 10,
+  },
+  // In-match pause affordance + overlay (AGENTS.md section 8: the button must
+  // never cover the play area — it lives on the top HUD strip next to the
+  // clock; the overlay is screen-pinned at panel center like the banners).
+  PAUSE: {
+    BUTTON_X_PX: 110,
+    BUTTON_Y_PX: 24,
+    BUTTON_FONT_SIZE_PX: '18px',
+    BUTTON_TEXT_COLOR: '#ffffff',
+    BUTTON_BG_COLOR: '#000000',
+    BUTTON_PADDING: { left: 10, right: 10, top: 4, bottom: 4 },
+    PANEL_CENTER_X_PX: 480,
+    PANEL_CENTER_Y_PX: 270,
+    PANEL_W_PX: 480,
+    PANEL_H_PX: 380,
+    BG_COLOR: 0x000000,
+    BG_ALPHA: 0.85,
+    FONT_FAMILY: 'monospace',
+    TITLE_Y_PX: -130,
+    TITLE_FONT_SIZE_PX: '40px',
+    ROW_Y_START_PX: -70,
+    ROW_SPACING_PX: 58,
+    ROW_FONT_SIZE_PX: '24px',
+    HINT_Y_PX: 135,
+    HINT_FONT_SIZE_PX: '14px',
+    TEXT_COLOR: '#ffffff',
+    SELECTED_COLOR: '#ffe135',
+    SELECTED_MARKER: '» ',
+    ACCENT_COLOR: '#ffe135',
+    CENTER_ORIGIN: 0.5,
+    // Above every gameplay HUD and banner (banners are 26-29), under the
+    // dev debug panel (40).
+    DEPTH: 35,
+    SCROLL_FACTOR: 0,
   },
 };
 
