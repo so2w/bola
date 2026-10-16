@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 import type { Player, IPlayerController } from '../entities/Player';
 import { BALANCE_CONFIG } from '../data/balance';
 import { choosePassTarget } from './passTarget';
+import { chooseAimedPassTarget } from './passAim';
 
 /** Point-ish positions consumed by the contextual action logic. */
 export interface Point {
@@ -16,6 +17,8 @@ export interface Point {
 export interface PassContext {
   getBallPos(): Point | null;
   getTeammates(): Point[];
+  /** Opponent positions for the directional pass openness score (optional). */
+  getOpponents?(): Point[];
   /** +1 when the human team attacks rightward. */
   attackDir?: 1 | -1;
 }
@@ -23,8 +26,11 @@ export interface PassContext {
 export { choosePassTarget } from './passTarget';
 
 /**
- * Human keyboard controller — WASD/arrows movement, contextual ACTION (J) and
- * charge SHOT (K, SPACE alias). Bindings are centralized here, never in Player.
+ * Human keyboard controller — WASD/arrows movement, contextual ACTION (A/J)
+ * and charge SHOT (S/K, SPACE alias) per AGENTS.md section 8. A doubles as
+ * move-left + action and S doubles as move-down + shoot (few-buttons console
+ * feel); a tap that ends inside INPUT.BUFFER_MS resolves the contextual
+ * action. Bindings are centralized here, never in Player.
  */
 export class HumanInputController implements IPlayerController {
   private player?: Player;
@@ -40,6 +46,23 @@ export class HumanInputController implements IPlayerController {
   /** MC-1 input buffer: action press timestamp, consumed once per press. */
   private actionDownAt: number | null = null;
   private actionConsumed = false;
+  /**
+   * Shot input buffer (game-feel): shot-key down timestamp plus whether the
+   * ball was inside the pickup radius at press time. A quick tap within
+   * INPUT.BUFFER_MS fires when the ball was in radius at EITHER press or
+   * release, tolerating a few frames of timing/position jitter. Longer holds
+   * (charged shots) keep the strict release-time proximity gate.
+   */
+  private shotDownAt: number | null = null;
+  private shotDownInRadius = false;
+  /**
+   * Playtest final (directional passing): the movement direction held at the
+   * last processed frame (null when neutral) plus the snapshot taken at
+   * action-press time — quick buffered taps aim with the direction held when
+   * the button went down even if the keys release first.
+   */
+  private lastAim: Point | null = null;
+  private aimAtPress: Point | null = null;
 
   /** MatchScene wires ball/teammate providers once in create. */
   public setContext(context: PassContext): void {
@@ -62,19 +85,33 @@ export class HumanInputController implements IPlayerController {
 
     // ACTION/SHOT listeners registered once; re-attach only rebinds the player.
     if (!this.shotListenersRegistered) {
+      const moveKeys = this.keys;
       const actionKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.J);
+      // A is move-left AND the action alias (AGENTS.md section 8: A/J act).
+      // Reuses the movement Key object, so no extra registration is needed.
+      const actionAlias = moveKeys.a;
       const shotKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.K);
+      // S is move-down AND the shoot alias (AGENTS.md section 8: S/K shoot).
+      const shotAliasS = moveKeys.s;
       const shotAlias = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
 
-      actionKey.on('down', () => {
+      const onActionDown = () => {
         this.actionDownAt = this.nowMs();
         this.actionConsumed = false;
-      });
-      actionKey.on('up', () => {
+        this.aimAtPress = this.lastAim ? { ...this.lastAim } : null;
+      };
+      const onActionUp = () => {
         this.resolveBufferedAction();
-      });
+      };
+      actionKey.on('down', onActionDown);
+      actionKey.on('up', onActionUp);
+      actionAlias?.on('down', onActionDown);
+      actionAlias?.on('up', onActionUp);
 
       const onShotDown = () => {
+        this.shotDownAt = this.nowMs();
+        this.shotDownInRadius =
+          this.ballDistance() <= BALANCE_CONFIG.INPUT.PASS_PICKUP_RADIUS_PX;
         this.player?.startCharge();
       };
       const onShotUp = () => {
@@ -82,6 +119,8 @@ export class HumanInputController implements IPlayerController {
       };
       shotKey.on('down', onShotDown);
       shotKey.on('up', onShotUp);
+      shotAliasS?.on('down', onShotDown);
+      shotAliasS?.on('up', onShotUp);
       shotAlias.on('down', onShotDown);
       shotAlias.on('up', onShotUp);
 
@@ -90,7 +129,7 @@ export class HumanInputController implements IPlayerController {
   }
 
   private nowMs(): number {
-    return this.scene?.time.now ?? 0;
+    return (this.scene as { time?: { now?: number } } | undefined)?.time?.now ?? 0;
   }
 
   /** Distance from the controlled player to the ball, or Infinity if unknown. */
@@ -124,12 +163,41 @@ export class HumanInputController implements IPlayerController {
       return;
     }
     if (this.ballDistance() > cfg.PASS_PICKUP_RADIUS_PX) {
+      // AGENTS.md section 8: without the ball the action button is the
+      // pressure/tackle attempt — Batch B plays the slide-tackle clip. Purely
+      // cosmetic here: the steal itself resolves through the possession and
+      // capture systems, the button adds no hidden mechanics.
+      player.startTackle();
       return;
     }
-    const target = this.pickPassTarget();
+    const target = this.pickAimedPassTarget() ?? this.pickPassTarget();
     if (target) {
       player.passTo(target);
     }
+  }
+
+  /**
+   * Playtest final: directional pass — the best receiver inside the aim cone
+   * around the held direction (press-time snapshot for buffered taps),
+   * weighted by distance + openness. Returns null for neutral aim or an empty
+   * cone so the caller falls back to the forward-cone auto-choice.
+   */
+  public pickAimedPassTarget(): Point | null {
+    const player = this.player;
+    const ctx = this.context;
+    if (!player || !ctx) {
+      return null;
+    }
+    const aim = this.lastAim ?? this.aimAtPress;
+    if (!aim) {
+      return null;
+    }
+    return chooseAimedPassTarget(
+      { x: player.sprite.x, y: player.sprite.y },
+      aim,
+      ctx.getTeammates(),
+      ctx.getOpponents?.() ?? [],
+    );
   }
 
   /**
@@ -150,22 +218,35 @@ export class HumanInputController implements IPlayerController {
     );
   }
 
-  /** MC-2: shot release only fires when the ball is within pickup radius. */
+  /**
+   * MC-2: shot release only fires when the ball is within pickup radius,
+   * with a small input buffer on the release path: quick taps (press to
+   * release within INPUT.BUFFER_MS) also fire when the ball was in radius
+   * at press time, so a few frames of jitter never eat the player's shot.
+   */
   private resolveShot(): void {
     const player = this.player;
     if (!player || !player.isChargingNow()) {
+      this.shotDownAt = null;
       return;
     }
     // Back-compat: without an injected context, charge releases unconditionally.
     if (!this.context) {
+      this.shotDownAt = null;
       player.releaseCharge();
       return;
     }
-    if (this.ballDistance() <= BALANCE_CONFIG.INPUT.PASS_PICKUP_RADIUS_PX) {
+    const inRadiusNow = this.ballDistance() <= BALANCE_CONFIG.INPUT.PASS_PICKUP_RADIUS_PX;
+    const elapsed = this.shotDownAt === null ? Infinity : this.nowMs() - this.shotDownAt;
+    this.shotDownAt = null;
+    const bufferedTap =
+      elapsed <= BALANCE_CONFIG.INPUT.BUFFER_MS && (inRadiusNow || this.shotDownInRadius);
+    if (inRadiusNow || bufferedTap) {
       player.releaseCharge();
     } else {
       player.cancelCharge();
     }
+    this.shotDownInRadius = false;
   }
 
   public update(_dtMs: number): void {
@@ -187,8 +268,10 @@ export class HumanInputController implements IPlayerController {
 
     if (inputVec.lengthSq() > 0) {
       inputVec.normalize();
+      this.lastAim = { x: inputVec.x, y: inputVec.y };
       player.move(inputVec);
     } else {
+      this.lastAim = null;
       player.move(new Phaser.Math.Vector2(0, 0));
     }
   }
