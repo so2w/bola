@@ -1,6 +1,6 @@
-# Retro Soccer 2D
+# Retro Barrio Soccer
 
-Retro Soccer 2D (Bola clone) — Phaser 3 + Vite + TypeScript MVP.
+Retro Barrio Soccer — original arcade soccer — Phaser 3 + Vite + TypeScript MVP.
 
 ## Prerequisites
 

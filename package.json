@@ -3,12 +3,13 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Retro Soccer 2D (Bola clone) — Phaser 3 + Vite + TypeScript MVP",
+  "description": "Retro Barrio Soccer — original arcade soccer — Phaser 3 + Vite + TypeScript MVP",
   "scripts": {
     "gen:sprites": "node scripts/generate-sprites.js",
     "dev": "vite",
-    "build": "vite build",
+    "build": "npm run typecheck && vite build",
     "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
